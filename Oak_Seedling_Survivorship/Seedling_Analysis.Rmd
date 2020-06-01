@@ -68,7 +68,9 @@ june18_dat <- june18_dat %>%
 june18_dat[is.na(june18_dat)] <- 0
 
 #average across transects
-
+june18_dat <- june18_dat %>% 
+  dplyr::group_by(Year, Month, Site, Block, Plot) %>% 
+  summarise(seedlings = mean(seedlings), after_1st_yr = mean(after_1st_yr), old_seedlings = mean(old_seedlings), dead = mean(dead), clump = mean(clump), alive_dess = mean(alive_dess), dead_dess = mean(dead_dess), herb_above = mean(herb_above), herb_below = mean(herb_below))
 
 #new column for clump presence/absence
 june18_dat <- june18_dat %>% 
@@ -123,7 +125,7 @@ june18_plot <- june18_dat %>%
                   position = position_dodge(width = 0.9),
                   width = 0.2) +
     labs(x = "Climate Site", 
-         y = "Average Number of Seedlings per Transect", 
+         y = "Average Number of Seedlings per Block", 
          title = "Number of Seedlings by Climate Site and Grazing Treatment", 
          fill = "Grazing Treatment")
 june18_plot
@@ -145,7 +147,7 @@ june18_dotplot <- june18_dat %>%
     geom_path(aes(group = Plot), linetype = 2) +
     geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.1) +
     labs(x = "Climate Site", 
-         y = "Average Number of Seedlings per Transect", 
+         y = "Average Number of Seedlings per Block", 
          title = "Number of Seedlings by Climate Site and Grazing Treatment", 
          fill = "Grazing Treatment")
 june18_dotplot
@@ -159,7 +161,7 @@ june18_dat %>%
     bar_plot +
     error_bars +
     labs(x = "Climate Site", 
-         y = "Average Number of Seedlings per Transect", 
+         y = "Average Number of Seedlings per Block", 
          title = "Number of Seedlings by Climate Site and Grazing Treatment", 
          fill = "Grazing Treatment")
 
@@ -190,87 +192,62 @@ ggplot(june18_dat, aes(x = Site, y = total, fill = Plot)) +
 ### Modelling Total Seedling Abundance
 ```{r}
 #determine best family
-total_mod1 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = gaussian)
-total_mod2 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = poisson)
+total_mod1 <- glmmTMB(total ~ Site*Plot + (1|Block), data = june18_dat, family = gaussian)
+total_mod2 <- glmmTMB(total ~ Site*Plot + (1|Block), data = june18_dat, family = poisson)
 
 model.sel(list(total_mod1, total_mod2))
-#poisson is better fit
+#gaussian is better fit
 
-#testing other pois distributions to handle underdispersion:
-total_mod2.1 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois)
-#total_mod2.2 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = compois)
-#not working
-model.sel(list(total_mod2, total_mod2.1))
-#generalized poisson is better fit
+total_mod0 <- glmmTMB(total ~ Site*Plot + (1|Block), data = june18_dat,
+                      family = gaussian(link = "log"))
+
+model.sel(list(total_mod1, total_mod0))
+#log link is better
 
 #does ZI improve fit?
-total_mod3 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~1)
+total_mod3 <- glmmTMB(total ~ Site*Plot + (1|Block), data = june18_dat,
+                      family = gaussian(link = "log"), ziformula = ~1)
 
-model.sel(list(total_mod2.1, total_mod3))
-#non-ZI is better fit, but delta is small - moving to test different ZI formulas:
-
-total_mod3.1 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~(1|Block/Transect)) 
-total_mod3.2 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~(1|Block))
-total_mod3.3 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~(1|Site))
-total_mod3.4 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~(1|Plot))
-#all above models have convergence issues
-
-model.sel(list(total_mod2.1, total_mod3, total_mod3.1, 
-               total_mod3.2, total_mod3.3, total_mod3.4))
-#non-ZI and ZI = ~1 are best
+model.sel(list(total_mod0, total_mod3))
+#non-ZI is better fit
 
 #do random effects improve fit?
-total_mod4 <- glmmTMB(total ~ Site*Plot, data = june18_dat, family = genpois)
+total_mod4 <- glmmTMB(total ~ Site*Plot, data = june18_dat,
+                      family = gaussian(link = "log"))
 
-model.sel(list(total_mod2.1, total_mod4))
-#random effects improve fit
+model.sel(list(total_mod0, total_mod4))
+#random effects don't improve fit, but delta is small and block is part of experimental design so keeping as per Bolker et al. 2009
 
 #which fixed effects improve fit?
-total_mod5 <- glmmTMB(total ~ Site + Plot + (1|Block/Transect), data = june18_dat, family = genpois)
-total_mod6 <- glmmTMB(total ~ Site + (1|Block/Transect), data = june18_dat, family = genpois)
-total_mod7 <- glmmTMB(total ~ Plot + (1|Block/Transect), data = june18_dat, family = genpois)
-total_mod_null <- glmmTMB(total ~ (1|Block/Transect), data = june18_dat, family = genpois)
+total_mod5 <- glmmTMB(total ~ Site + Plot + (1|Block), data = june18_dat,
+                      family = gaussian(link = "log"))
+total_mod6 <- glmmTMB(total ~ Site + (1|Block), data = june18_dat,
+                      family = gaussian(link = "log"))
+total_mod7 <- glmmTMB(total ~ Plot + (1|Block), data = june18_dat,
+                      family = gaussian(link = "log"))
+total_mod_null <- glmmTMB(total ~ (1|Block), data = june18_dat,
+                          family = gaussian(link = "log"))
 
-model.sel(list(total_mod2.1, total_mod5, total_mod6, total_mod7, total_mod_null))
-
-#full model without interaction has better fit (weight = 0.659), should I average the two models?
-
-#testing random slopes
-#total_mod8 <- glmmTMB(total ~ Site*Plot + (1 + Site|Block/Transect), data = june18_dat, family = genpois)
-#fails to converge
-#total_mod9 <- glmmTMB(total ~ Site*Plot + (1 + Site|Block), data = june18_dat, family = genpois)
-#fails to converge
-#total_mod10 <- glmmTMB(total ~ Site*Plot + (Plot|Block/Transect), data = june18_dat, family = genpois)
-#fails to converge
-#total_mod11 <- glmmTMB(total ~ Site*Plot + (Plot|Block), data = june18_dat, family = genpois)
-#singular convergence
-
-#no random slope models available w/out further troubleshooting
+model.sel(list(total_mod0, total_mod5, total_mod6, total_mod7, total_mod_null))
+#Model without interaction is best fit
 
 #importance of Plot
 model.sel(list(total_mod5, total_mod6))
-#delta AIC = 22.9
+#delta AIC = 1.97
 anova(total_mod5, total_mod6)
-#p < 0.001
+#p < 0.05
 
 #importance of Site
 model.sel(list(total_mod5, total_mod7))
-#delta AIC = 41.57
+#delta AIC = 2.37
 #Site explains more variation than Plot?
 anova(total_mod5, total_mod7)
-#p < 0.001
+#p < 0.01
 
-#importance of interaction
-model.sel(list(total_mod2.1, total_mod5))
-#delta AIC = 1.31
-#NO INTERACTION MODEL IS BETTER
-anova(total_mod2.1, total_mod5)
-#p = 0.1461 (not a sig diff between P+S and P*S)
+#Site and Plot improve model fit
 
-#Site and Plot improve model fit, interaction is slightly worse than no interaction
-
-#full model with generalized poisson distribution and WITHOUT interaction is best (may want to average the two models):
-total_mod <- total_mod5
+#model with log gaussian distribution and WITHOUT interaction is best
+total_mod <- total_mod0
 summary(total_mod)
 
 #DHARMa Diagnostics:
@@ -279,8 +256,7 @@ simulationOutput <- simulateResiduals(fittedModel = total_mod, plot = T, n = 100
 hist(simulationOutput)
 
 testResiduals(simulationOutput, plot = T)
-#uniformity, dispersion, and outlier tests all significant
-#looks to be underdispersed based on QQ
+#looks to be underdispersed based on QQ, but nonsignificant
 
 testZeroInflation(simulationOutput)
 
@@ -289,33 +265,6 @@ tab_model(total_mod)
 #No tidy method for objects of class glmmTMB
 ```
 
-### Trying glmmADMB on total seedling data
-```{r}
-total_admb1 <- glmmadmb(total ~ Site * Plot + (1|Block/Transect), data = june18_dat, family = "poisson")
-total_admb2 <- glmmadmb(total ~ Site * Plot + (1|Block/Transect), data = june18_dat, family = "nbinom")
-total_admb3 <- glmmadmb(total ~ Site * Plot + (1|Block/Transect), data = june18_dat, family = "poisson", zeroInflation = T)
-
-#really slow
-```
-
-### Two-way ANOVA, total seedlings
-```{r}
-shapiro.test(june18_dat$total)
-#non-normal
-
-table(june18_dat$Site, june18_dat$Plot)
-
-aov1 <- aov(seedlings ~ Plot * Site, data = june18_dat)
-summary(aov1)
-#looks like both Plot and Site have significant effect, and their interaction
-
-TukeyHSD(aov1)
-plot(aov1, 1)
-leveneTest(seedlings ~ Plot * Site, data = june18_dat)
-#non-homogenous variance
-plot(aov1, 2)
-#definitely not normal
-```
 ## Living Seedling Abundance
 
 ### Exploratory Visualizations
@@ -323,7 +272,8 @@ plot(aov1, 2)
 #these visualizations correspond to seedling survival
 
 ggplot(june18_dat, aes(x = alive))+
-  geom_histogram(binwidth = 1)
+  geom_histogram(binwidth = 0.1)
+#ZI gaussian?
 
 ggplot(june18_dat, aes(x = alive)) +
   stat_ecdf(geom = "step")
@@ -339,7 +289,7 @@ june18_alive_plot <- june18_dat %>%
                   position = position_dodge(width = 0.9),
                   width = 0.2) +
     labs(x = "Climate Site", 
-         y = "Average Number of Living Seedlings per Transect", 
+         y = "Average Number of Living Seedlings per Block", 
          title = "Number of Living Seedlings by Climate Site and Grazing Treatment", 
          fill = "Grazing Treatment")
 june18_alive_plot
@@ -385,99 +335,85 @@ ggplot(june18_dat, aes(x = Site, y = alive, fill = Plot)) +
 ### Modeling Living Seedling Abundance
 ```{r}
 #determine best family
-alive_mod1 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = gaussian)
-alive_mod2 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = poisson)
-alive_mod3 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois)
-#alive_mod4 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = compois)
-#doesnt work
-
-model.sel(list(alive_mod1, alive_mod2, alive_mod3))
-#generalized poisson is best distribution
+alive_mod1 <- glmmTMB(alive ~ Site*Plot + (1|Block), data = june18_dat, family = gaussian)
+alive_mod2 <- glmmTMB(alive ~ Site*Plot + (1|Block), data = june18_dat,
+                      family = gaussian(link = "log"))
+#doesn't work?
+model.sel(list(alive_mod1, alive_mod2))
 
 #testing ZI
-alive_mod5 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~1)
-alive_mod6 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~(1|Block/Transect))
-#NA function eval/convergence problem
-alive_mod7 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~(1|Block))
-#convergence problem
+alive_mod3 <- glmmTMB(alive ~ Site*Plot + (1|Block), data = june18_dat,
+                      family = gaussian, ziformula = ~1)
+alive_mod4 <- glmmTMB(alive ~ Site*Plot + (1|Block), data = june18_dat,
+                      family = gaussian, ziformula = ~(1|Block))
 
-model.sel(list(alive_mod3, alive_mod5))
-#non-ZI is better, delta = 2.04
+model.sel(list(alive_mod1, alive_mod3, alive_mod4))
+#non-ZI is best
 
 #do random effects imrpove model fit?
-alive_mod8 <- glmmTMB(alive ~ Site*Plot, data = june18_dat, family = genpois)
+alive_mod5 <- glmmTMB(alive ~ Site*Plot, data = june18_dat, family = gaussian)
 
-model.sel(list(alive_mod3, alive_mod8))
-#random effects do improve fit
+model.sel(list(alive_mod1, alive_mod5))
+#random effects don't improve fit
 
 #which fixed effects improve fit?
-alive_mod9 <- glmmTMB(alive ~ Site + Plot + (1|Block/Transect), data = june18_dat, family = genpois)
-alive_mod10 <- glmmTMB(alive ~ Site + (1|Block/Transect), data = june18_dat, family = genpois)
-alive_mod11 <- glmmTMB(alive ~ Plot + (1|Block/Transect), data = june18_dat, family = genpois)
-#all above models throw NA function eval, but no convergence issues
-alive_mod_null <- glmmTMB(alive ~ (1|Block/Transect), data = june18_dat, family = genpois)
+alive_mod6 <- glmmTMB(alive ~ Site + Plot + (1|Block), data = june18_dat,
+                      family = gaussian)
+alive_mod7 <- glmmTMB(alive ~ Site + (1|Block), data = june18_dat,
+                       family = gaussian)
+alive_mod8 <- glmmTMB(alive ~ Plot + (1|Block), data = june18_dat,
+                       family = gaussian)
+alive_mod_null <- glmmTMB(alive ~ (1|Block), data = june18_dat,
+                          family = gaussian)
 
-model.sel(list(alive_mod3, alive_mod9, alive_mod10, alive_mod11, alive_mod_null))
-#full model is best
+model.sel(list(alive_mod1, alive_mod6, alive_mod7, alive_mod8, alive_mod_null))
+#Site-only model is best
 
 #importance of Site
-model.sel(list(alive_mod9, alive_mod11))
-#delta AIC = 381.43
-anova(alive_mod9, alive_mod11)
+model.sel(list(alive_mod7, alive_mod_null))
+#delta AIC = 11.95
+anova(alive_mod7, alive_mod_null)
 #p < 0.001
 
-#importance of Plot
-model.sel(list(alive_mod9, alive_mod10))
-#delta AIC = 6.37
-anova(alive_mod9, alive_mod10)
-#p < 0.005
-
-#importance of interaction
-model.sel(list(alive_mod3, alive_mod9))
-#delta AIC = 52.75
-anova(alive_mod3, alive_mod9)
-#p < 0.001
-
-#full model with generalized poisson distribution is best fit:
-alive_mod <- alive_mod3
+#model with Site only and gaussian distribution is best fit:
+alive_mod <- alive_mod7
 
 #DHARMa Diagnostics:
 
-alive_sim <- simulateResiduals(fittedModel = alive_mod, plot = T, n = 1000)
+alive_sim <- simulateResiduals(fittedModel = alive_mod, plot = F, n = 1000)
 hist(alive_sim)
 
 testResiduals(alive_sim, plot = T)
-#uniformity, dispersion, and outlier tests all significant
-#looks to be underdispersed based on QQ
+#uniformity, dispersion, and outlier tests all non-significant
+#looks to be a bit underdispersed based on QQ
 
 testZeroInflation(alive_sim)
 #looks to be ZI?
 
 tab_model(alive_mod)
-#tidy(total_mod)
-#No tidy method for objects of class glmmTMB
+#not sure how to interpret p-values here
 ```
 
 ### Exploratory Visualizations: Clumps
 ```{r}
 ggplot(june18_dat, aes(x = clump))+
   geom_histogram()
-#mostly zero or one
 
 ggplot(june18_dat, aes(x = clump_YN))+
   geom_histogram(stat = "count")
+#almost every block has clumps
  
 #clump presence by site and plot
 june18_clump_plot <- june18_dat %>% 
   dplyr::group_by(Site, Plot) %>% 
-  dplyr::summarize(mean = list(mean_se(clump_YN))) %>%
+  dplyr::summarize(mean = list(mean_se(clump))) %>%
   unnest(mean) %>% 
   ggplot(aes(x = Site, y = y, fill = Plot)) +
     bar_plot +
     error_bars +
     labs(x = "Climate Site", 
-         y = "Proportion of Transects with Clumps", 
-         title = "Presence of Clumps by Climate Site and Grazing Treatment", 
+         y = "Average Number of Clumps", 
+         title = "Number of Clumps by Climate Site and Grazing Treatment", 
          fill = "Grazing Treatment")
 june18_clump_plot
 ggsave("plots/june18_clump_plot.png", width = 10)
@@ -485,7 +421,7 @@ ggsave("plots/june18_clump_plot.png", width = 10)
 
 ### Two-way ANOVA, clumps
 ```{r}
-shapiro.test(june18_dat$clump_YN)
+shapiro.test(june18_dat$clump)
 #non-normal
 
 table(june18_dat$Site, june18_dat$grazed_YN)
@@ -521,7 +457,6 @@ ggplot(june18_dat, aes(x = Plot, y = Site, fill = dead)) +
 #histogram of proportion dead
 ggplot(june18_dat, aes(x = prop_dead)) +
   geom_histogram()
-#very interesting - most transects are either 0 or 100% dead
 
 #proportion dead by plot and site
 june18_dat %>% 
@@ -555,93 +490,60 @@ june18_dat %>%
   ggplot(aes(x = Plot, y = y)) +
     bar_plot +
     error_bars
-#potentially sig. dif. between O and W/WC
-#O has lowest death rate - compare this to herbivory presence
+#similar across plots
 ```
 
 ### Modelling Proportion Dead
 ```{r}
-june18_dat$prop_dead <- round(june18_dat$prop_dead)
-june18_dat$prop_dead <- as.factor(as.numeric(june18_dat$prop_dead))
-
-#best binomial link?
-dead_mod1 <- glmmTMB(prop_dead ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
-dead_mod_probit <- glmmTMB(prop_dead ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = binomial(link = "probit"))
-
-mods <- list(dead_mod1, dead_mod_probit)
-model.sel(mods)
-#logit is better
+dead_mod1 <- glmmTMB(prop_dead ~ Site*Plot + (1|Block), data = june18_dat,
+                     family = gaussian)
 
 #does ZI improve fit?
-dead_mod2 <- glmmTMB(prop_dead ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = "binomial", ziformula = ~1)
+dead_mod2 <- glmmTMB(prop_dead ~ Site*Plot + (1|Block), data = june18_dat,
+                     family = gaussian, ziformula = ~1)
+dead_mod3 <- glmmTMB(prop_dead ~ Site*Plot + (1|Block), data = june18_dat,
+                     family = gaussian, ziformula = ~(1|Block))
+#non-positive-definite Hessian matrix
 
-mods <- list(dead_mod1, dead_mod2)
-model.sel(mods)
-#non-ZI is better fit
+model.sel(list(dead_mod1, dead_mod2, dead_mod3))
+#non-ZI is best fit
 
 #do random effects improve fit?
-dead_mod3 <- glmmTMB(prop_dead ~ Site*Plot, data = june18_dat, family = "binomial")
+dead_mod4 <- glmmTMB(prop_dead ~ Site*Plot, data = june18_dat,
+                     family = gaussian)
 
-mods <- list(dead_mod1, dead_mod3)
-model.sel(mods)
-#random effects improve fit
+model.sel(list(dead_mod1, dead_mod4))
+#random effects don't improve fit
 
 #which fixed effects improve fit?
-dead_mod4 <- glmmTMB(prop_dead ~ Site + Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
-dead_mod5 <- glmmTMB(prop_dead ~ Site + (1|Block/Transect), data = june18_dat, family = "binomial")
-dead_mod6 <- glmmTMB(prop_dead ~ Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
-dead_mod_null <- glmmTMB(prop_dead ~ (1|Block/Transect), data = june18_dat, family = "binomial")
+dead_mod5 <- glmmTMB(prop_dead ~ Site + Plot + (1|Block), data = june18_dat,
+                     family = gaussian)
+dead_mod6 <- glmmTMB(prop_dead ~ Site + (1|Block), data = june18_dat,
+                     family = gaussian)
+dead_mod7 <- glmmTMB(prop_dead ~ Plot + (1|Block), data = june18_dat,
+                     family = gaussian)
+dead_mod_null <- glmmTMB(prop_dead ~ (1|Block), data = june18_dat,
+                         family = gaussian)
 
-mods <- list(dead_mod1, dead_mod4, dead_mod5, dead_mod6, dead_mod_null)
-model.sel(mods)
-#full model w/interaction has best fit
-
-#testing random slopes
-#dead_mod7 <- glmmTMB(prop_dead ~ Site*Plot + (1 + Site|Block/Transect), data = june18_dat, family = "binomial")
-#fails to converge
-#dead_mod7 <- glmmTMB(prop_dead ~ Site*Plot + (1 + Site|Block), data = june18_dat, family = "binomial")
-#fails to converge
-#dead_mod8 <- glmmTMB(prop_dead ~ Site*Plot + (Plot|Block/Transect), data = june18_dat, family = "binomial")
-#fails to converge
-#dead_mod8 <- glmmTMB(prop_dead ~ Site*Plot + (Plot|Block), data = june18_dat, family = "binomial")
-#fails to converge
-
-#no random slope models available
-
-#importance of Plot
-mods <- list(dead_mod4, dead_mod5)
-model.sel(mods)
-#delta AIC = 13.83
-anova(dead_mod4, dead_mod5)
-#p < 0.001
+model.sel(list(dead_mod1, dead_mod5, dead_mod6, dead_mod7, dead_mod_null))
+#Site-only model has best fit
 
 #importance of Site
-mods <- list(dead_mod4, dead_mod6)
-model.sel(mods)
-#delta AIC = 774.56
-anova(dead_mod4, dead_mod6)
+model.sel(list(dead_mod6, dead_mod_null))
+#delta AIC = 44.35
+anova(dead_mod6, dead_mod_null)
 #p < 0.001
 
-#importance of interaction
-mods <- list(dead_mod1, dead_mod4)
-model.sel(mods)
-#delta AIC = 4.66
-anova(dead_mod1, dead_mod4)
-#p < 0.05
-
-#Site, Plot, and their interaction all improve model fit
-
-#best model is full model with interaction:
-dead_mod <- dead_mod1
+#Best model is Site-only with gaussian distribution:
+dead_mod <- dead_mod6
 summary(dead_mod)
 
 #DHARMa Diagnostics:
 
-simulationOutput <- simulateResiduals(fittedModel = dead_mod, plot = F, n = 1000)
-hist(simulationOutput)
+dead_sim <- simulateResiduals(fittedModel = dead_mod, plot = F, n = 1000)
+hist(dead_sim)
 
-testResiduals(simulationOutput, plot = T)
-#uniformity and dispersion OK, outlier test significant
+testResiduals(dead_sim, plot = T)
 
 tab_model(dead_mod)
 #this is really ugly - I want something like Perea et al.
@@ -682,7 +584,7 @@ june18_dat %>%
   ggplot(aes(x = Site, y = y)) +
     bar_plot +
     error_bars
-#Arid has way more herbivory - confirms suggestion by L-S
+#Arid has most herbivory - confirms suggestion by L-S
 
 #herbivory by site, split into above- and below- ground
 june18_dat %>% 
@@ -702,7 +604,7 @@ june18_dat %>%
   ggplot(aes(x = Plot, y = y)) +
     bar_plot +
     error_bars
-#TOTAL herbivory increases with grazing guilds present
+#TOTAL herbivory increases with cattle present
 
 #herbivory by plot, split between above- and below- ground
 june18_dat %>% 
@@ -712,65 +614,58 @@ june18_dat %>%
   unnest(mean) %>% 
   ggplot(aes(x = Plot, y = y, fill = herb_type)) +
     geom_bar(stat = "identity", position = "stack")
-#aboveground herbivory roughly the same in O and W, much more in WC
 ```
 ### Modeling Herbivory Occurrence
 ```{r}
 #test links
-herb_mod1 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block/Transect), data = june18_dat, family = "binomial")
-herb_mod2 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block/Transect), data = june18_dat, family = binomial(link = "probit"))
-
-model.sel(list(herb_mod1, herb_mod2))
-#logit is better, but delta is only 0.31...
+herb_mod1 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block), data = june18_dat,
+                     family = "binomial")
+herb_mod2 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block), data = june18_dat,
+                     family = binomial(link = "probit"))
+#convergence problem
+herb_mod0 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block), data = june18_dat,
+                     family = "nbinom2")
+#nb1 and nb2 fail to converge
 
 #test ZI
-herb_mod3 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block/Transect), data = june18_dat, family = "binomial", ziformula = ~1)
-
-model.sel(list(herb_mod1, herb_mod3))
-#might want to include ZI, delta is only 1.37...
+#herb_mod3 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block), data = june18_dat, family = "binomial", ziformula = ~1)
+#herb_mod3.1 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block), data = june18_dat, family = "binomial", ziformula = ~(1|Block))
+#convergence problems
 
 #test ranef
 herb_mod4 <- glmmTMB(herb_YN ~ Plot*Site, data = june18_dat, family = "binomial")
 
 model.sel(list(herb_mod1, herb_mod4))
-#random effects improve fit
+#random effects don't improve fit, delta is tiny though
 
 #test fixed effects
-herb_mod5 <- glmmTMB(herb_YN ~ Plot + Site + (1|Block/Transect), data = june18_dat, family = "binomial")
-herb_mod6 <- glmmTMB(herb_YN ~ Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
-herb_mod7 <- glmmTMB(herb_YN ~ Site + (1|Block/Transect), data = june18_dat, family = "binomial")
-herb_mod_null <- glmmTMB(herb_YN ~ (1|Block/Transect), data = june18_dat, family = "binomial")
+herb_mod5 <- glmmTMB(herb_YN ~ Plot + Site + (1|Block), data = june18_dat,
+                     family = "binomial")
+herb_mod6 <- glmmTMB(herb_YN ~ Plot + (1|Block), data = june18_dat,
+                     family = "binomial")
+herb_mod7 <- glmmTMB(herb_YN ~ Site + (1|Block), data = june18_dat,
+                     family = "binomial")
+herb_mod_null <- glmmTMB(herb_YN ~ (1|Block), data = june18_dat,
+                         family = "binomial")
 
 model.sel(list(herb_mod1, herb_mod5, herb_mod6, herb_mod7, herb_mod_null))
-#full model w/ interaction is best
-
-#importance of Plot
-model.sel(list(herb_mod5, herb_mod7))
-#delta AIC = 15.08
-anova(herb_mod5, herb_mod7)
-#p < 0.001
+#Site-only model is best
 
 #importance of Site
-model.sel(list(herb_mod5, herb_mod6))
-#delta AIC = 197.04
-anova(herb_mod5, herb_mod6)
-#p < 0.001
+model.sel(list(herb_mod7, herb_mod_null))
+#delta AIC = 2.87
+anova(herb_mod7, herb_mod_null)
+#p < 0.05
 
-#importance of interaction
-model.sel(list(herb_mod1, herb_mod5))
-#delta AIC = 48.76
-anova(herb_mod1, herb_mod5)
-#p < 0.001
-
-#Site, Plot, and their interaction all improve model fit
-#best model is full model:
-herb_mod <- herb_mod1
+#best model is Site-only model with binomial distribution
+herb_mod <- herb_mod7
 summary(herb_mod)
 
 #DHARMa Diagnostics:
-simulationOutput <- simulateResiduals(fittedModel = herb_mod, plot = F, n = 1000)
-hist(simulationOutput)
-testResiduals(simulationOutput, plot = T)
+herb_sim <- simulateResiduals(fittedModel = herb_mod, plot = F, n = 1000)
+hist(herb_sim)
+
+testResiduals(herb_sim, plot = T)
 #uniformity dispersion and outliers OK
 
 #model results table:
@@ -795,7 +690,6 @@ june18_dat %>%
   unnest(mean) %>%
   ggplot(aes(x = herb_YN, y = y, fill = Site)) +
     geom_bar(stat = "identity", position = "dodge")
-#effect of herbivory fairly consistent across climate sites
 
 june18_dat %>%
   dplyr::group_by(Plot, herb_YN) %>% 
@@ -803,7 +697,7 @@ june18_dat %>%
   unnest(mean) %>%
   ggplot(aes(x = herb_YN, y = y, fill = Plot)) +
     geom_bar(stat = "identity", position = "dodge")
-#herbivory increases death rate 4x in O and W, but only 2x in WC - herbivory by cattle not as destructive as herbivory by wildlife? Or presence of cattle somehow decreases herbivory intensity?
+#herbivory increases death rate in O and W, but decreases death rate in WC - herbivory by cattle not as destructive as herbivory by wildlife? Or presence of cattle somehow decreases overall herbivory intensity?
 
 june18_dat %>% 
   gather(herb_type, herb, above_YN:below_YN) %>% 
@@ -817,12 +711,12 @@ june18_dat %>%
 
 ### Adding herbivory to proportion dead model
 ```{r}
-dead_mod7 <- glmmTMB(prop_dead ~ Plot*Site + herb_YN + (1|Block/Transect), data = june18_dat, family = "binomial")
-
-model.sel(list(dead_mod, dead_mod7))
-#adding herbivory improves fit
-
-dead_mod8 <- glmmTMB(prop_dead ~ herb_YN + (1|Block/Transect), data = june18_dat, family = "binomial")
+dead_mod8 <- glmmTMB(prop_dead ~ Site + herb_YN + (1|Block), data = june18_dat, family = gaussian)
 
 model.sel(list(dead_mod, dead_mod8))
+#adding herbivory doesn't improve fit
+
+dead_mod9 <- glmmTMB(prop_dead ~ herb_YN + (1|Block), data = june18_dat, family = gaussian)
+model.sel(list(dead_mod, dead_mod9))
+#site-only is better than herb-only
 ```

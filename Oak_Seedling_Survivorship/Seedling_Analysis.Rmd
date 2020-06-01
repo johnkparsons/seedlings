@@ -67,6 +67,9 @@ june18_dat <- june18_dat %>%
 #replace na's with 0's
 june18_dat[is.na(june18_dat)] <- 0
 
+#average across transects
+
+
 #new column for clump presence/absence
 june18_dat <- june18_dat %>% 
   mutate(clump_YN = if_else(clump == 0, 0, 1))

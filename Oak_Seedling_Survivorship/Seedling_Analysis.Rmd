@@ -95,7 +95,7 @@ june18_dat <- june18_dat %>%
   mutate(herb_YN = if_else(above_YN == 1, 1, if_else(below_YN == 1, 1, 0))) 
 
 #write tidy data to .csv
-june18_tidy.csv <- write.csv(june_18_dat, "data/june18_tidy.csv", row.names = FALSE)
+june18_tidy.csv <- write.csv(june18_dat, "data/june18_tidy.csv", row.names = FALSE)
 ```
 
 # Analyses and Visualizations
@@ -304,7 +304,7 @@ june18_dat %>%
     bar_plot +
     error_bars +
     labs(x = "Climate Site", 
-         y = "Average Number of Seedlings per Transect", 
+         y = "Average Number of Seedlings per Block", 
          title = "Number of Seedlings by Climate Site and Grazing Treatment", 
          fill = "Grazing Treatment" )
 
@@ -459,7 +459,7 @@ ggplot(june18_dat, aes(x = prop_dead)) +
   geom_histogram()
 
 #proportion dead by plot and site
-june18_dat %>% 
+prop_dead_plot <- june18_dat %>% 
   dplyr::group_by(Site, Plot) %>% 
   dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
   unnest(mean) %>% 
@@ -471,6 +471,8 @@ june18_dat %>%
          title = "Seedling Death by Climate Site and Grazing Treatment", 
          fill = "Grazing Treatment") +
     scale_fill_brewer(palette = "Dark2")
+prop_dead_plot
+ggsave("plots/prop_dead_plot.png", width = 10)
 #arid has way higher proportion of dead saplings than other climate sites
 
 #proportion dead by site only
@@ -562,7 +564,7 @@ ggplot(june18_dat, aes(x = herb_YN)) +
   geom_histogram(binwidth = 1)
 
 #occurrence of herbivory by plot and site:
-june18_dat %>% 
+herb_occurence_plot <- june18_dat %>% 
   dplyr::group_by(Site, Plot) %>% 
   dplyr::summarize(mean = list(mean_se(herb_YN))) %>%
   unnest(mean) %>% 
@@ -574,6 +576,8 @@ june18_dat %>%
          title = "Herbivory by Climate Site and Grazing Treatment", 
          fill = "Grazing Treatment") +
     scale_fill_brewer(palette = "Dark2")
+herb_occurence_plot
+ggsave("plots/herb_occurrence_plot.png", width = 10)
 #weird interaction between plot WC and site Mesic, see model table as well
 
 #total herbivory by site only

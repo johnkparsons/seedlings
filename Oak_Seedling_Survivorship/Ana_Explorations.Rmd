@@ -1,0 +1,211 @@
+---
+title: "Ana_explorations"
+author: "Ana Miller-ter Kuile"
+date: "6/4/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#install.packages("broom")
+library(tidyverse) #ggplot
+library(dplyr) #data transformation
+library(readr)
+library(lubridate) #date manipulation
+library(ggpubr)
+library(car)
+library(RColorBrewer) #plot colors
+library(MuMIn) #model.sel, dredge
+library(glmmTMB) #GLMMs
+#library(jtools) #model analysis
+library(sjPlot) #model output table
+library(DHARMa) #model diagnostics
+#library(glmmADMB) #alternate package for GLMM - interested in using MCMC
+library(broom)
+
+#Packages I added
+library(effects) #for plotting marginal effects of mixed models
+library(here) #file paths that are easy!
+library(emmeans) #post-hoc analyses
+```
+# Intro
+
+This is such a cool dataset, and you're finding some really cool patterns in your data! I have tried to do the following script in the format that I would run model selection for one of my own projects. I hope it is helpful as a model, and I have ended it (although maybe should have begun it) with some general guidelines I follow for model selection. The best you can do is be consistent and transparent when it comes to your statistics and model selection process, which you are already doing!
+
+# Calling random effects
+
+Determining Block random effects based on this lecture: https://drive.google.com/file/d/0B5QCuGKrabF5aVNzYjlSLW8zMjQ/view 
+
+Didn't change your code too much, jsut made sure that Block corresponded to the right climate site (right now, they just have levels "1", "2", "3", without specifying whether they are Block 1 of Arid or Block 1 of Intermediate)
+
+```{r}
+knitr::include_graphics(here("Oak_Seedling_Survivorship", "plots", "Ana-plots", "block_design.png"))
+```
+I just made sure the random effect structure below made sure to include both Block Number and Site name, so that the random effect term is just Arid_1, Arid_2, Intermediate_1, etc.
+
+Like you, I *could not* get the transect-level data to play nice. They are so weirdly distributed and literally none of my normal fixes worked (negative binomial, zero inflation, offset terms, or individual level random effects all didn't work)
+
+# Transect-level: doesn't work
+
+```{r, eval = FALSE}
+june18_dat <- read.csv(here("Oak_Seedling_Survivorship", "data", "june18_tidy.csv"))
+
+june18_dat$Site <- factor(june18_dat$Site, levels = c("Arid", "Intermediate", "Mesic"))
+june18_dat$Block <- factor(june18_dat$Block, levels = c("1", "2", "3"))
+june18_dat$Plot <- factor(june18_dat$Plot, levels = c("O", "W", "WC"))
+june18_dat$Transect <- factor(june18_dat$Transect, levels = c("1", "2", "3"))
+
+#this creates a random effect of block_site. 
+test <- june18_dat %>% 
+  mutate(RE = paste(Site, Block, sep = "_"),
+         area = 300)
+
+test$ID <- 1:nrow(test) #individual level random effect
+
+hist(test$total) #weird data...
+
+```
+
+```{r, eval = FALSE}
+#Model additions (tried in many iterations) that did not work!
+
+#negative binomial to fix overdispersion
+mod1 <- glmmTMB(total ~ Site*Plot + (1|RE),
+                data = test,
+                family = "nbinom2",
+                REML = FALSE)
+
+#negative binomial AND individual level random effect for 
+#overdispersion
+mod2 <- glmmTMB(total ~ Site*Plot + (1|RE) + (1|ID),
+                data = test,
+                family = "nbinom2",
+                REML = FALSE)
+
+#creating an offset term so that data are in terms of seedling
+#density instead of abundance, has fixed overdispersion
+#for me in the past
+mod3 <- glmmTMB(total ~ Site*Plot + (1|RE) + (1|ID),
+                data = test,
+                family = "nbinom2",
+                offset = area,
+                REML = FALSE)
+
+#adding a zero-inflation term
+mod3 <- glmmTMB(total ~ Site*Plot + (1|RE) + (1|ID),
+                data = test,
+                family = "nbinom2",
+                offset = area,
+                ziformula = ~1,
+                REML = FALSE)
+```
+
+# Something that worked: Summed transects by plot
+
+I did get this fix to work - I added transect values per plot so that rather than having data from the equivalent of 3 2x50m transects, we now have data from the equivalent of 1 2x150m transects. 
+
+```{r}
+plot_lev <- june18_dat %>%
+  group_by(Site, Block, Plot) %>%
+  summarise(total = sum(total))
+```
+
+
+```{r}
+#honestly not sure making these factors is necessary, but 
+#if we wanted to do post-hoc analyses (shown below) between
+#levels it could be helpful to specify whether these levels 
+#have some sort of order to them
+
+plot_lev$Site <- factor(plot_lev$Site, levels = c("Arid", "Intermediate", "Mesic"))
+plot_lev$Block <- factor(plot_lev$Block, levels = c("1", "2", "3"))
+plot_lev$Plot <- factor(plot_lev$Plot, levels = c("O", "W", "WC"))
+
+#making Block correspond to climate site so that the random
+#effect term is grouping properly
+plot_lev <- plot_lev %>% 
+  mutate(RE = paste(Site, Plot, sep = "_"))
+
+hist(plot_lev$total) #data highly skewed, and no zeros
+```
+
+Given this data distribution, I would suspect overdispersion (though this didn't end up being the case), but if you have similar datasets that are overdispersed, there is also a truncated_nbinom2 family in glmmTMB to try and fix this.
+
+```{r}
+#truncated_genpois since there were no zero values in the 
+#datset after I grouped by Plot withing Block.
+mod1 <- glmmTMB(total ~ Site*Plot + (1|RE),
+                data = plot_lev,
+                family = "truncated_genpois",
+                REML = FALSE) #for model selection with AICc
+
+dredge(mod1) #does basically what your model selection does, just looks at all possible models with this random effects structure, but #manipulating the fixed effects, giving all of them with AICc
+#for model selection. Pluses in output indicate if a term is in
+#the model or not, and they are ranked by increasing AICc
+
+#best model for that, now called with REML=TRUE (default) for
+#model diagnostics
+mod2 <- glmmTMB(total ~ Site + (1|RE),
+                data = plot_lev,
+                family = "truncated_genpois")
+```
+
+
+Model diagnostics:
+
+```{r}
+modelFit <- simulateResiduals(mod2)
+plot(modelFit)
+testZeroInflation(modelFit)
+testDispersion(modelFit)
+```
+
+The plot(allEffects(MOD)) function lets you model marginal effects by the levels of a fixed effect in a model. Pretty useful diagnostic for understanding directionality!
+
+```{r}
+plot(allEffects(mod2))
+```
+
+# Post hoc tests with emmeans()
+
+Then you can do a post-hoc test (since your fixed effect is a factor with levels) comparing levels of the fixed effect to each other. What it looks like is that there is a difference between Intermediate-Mesic, but not between any other pairs. Does this make sense?
+
+```{r}
+means <- emmeans(mod2, "Site")
+pairs(means)
+```
+
+```{r}
+ggplot(plot_lev, aes(x = Site, y = total)) +
+  geom_boxplot() + theme_bw()
+```
+
+# Extend it
+
+I did this just to explore the data, but you could def look at other variables of interest this way (herbivory, dead seedlings, still alive seedlings), but I didn't include plot-level summaries of these values so I don't know if they will play nice... (hopefully, fingers crossed!)
+
+I think the fact that there are site-level differences without plot-level differences in total seedlings is SUPER interesting - I hypothesize that survival may be hugely different with/without grazing, so you have an opportunity to maybe find a mechanism here! Super cool!
+
+# General thoughts on model selection based on your questions:
+
+1. Try to approach data in raw form (when possible, not always with messy ecological data!). This is why I tried to approach this with the raw transect data first, and when that didn't work, used a raw plot count (added transects) rather than averaging. This is my approach, I don't think averaging is **wrong**, but I think best practice (and the benefit of mixed models) is that you can model with raw data. That said, visualizing data can be very different when you're trying to communicate findings clearly, in which case for this project, for example, I might average the blocks of the same climate sites (and find standard errors) and make a bar graph of these values with error bars. A  boxplot is also a good option here, unless data are skewed toward zero, which might make it confusing.
+
+2. Count data are often highly skewed, which makes using Gaussian (normal distribution assumption) really hard to use. In general, the Poisson family is great for count data, and there are TONS in the glmmTMB package. (I usually use genpois or truncated_genpois, which is basically count data with no zeros, which normal Poisson doesn't like). For the averaged data, I think a Gaussian is the right first approach, though I don't have experience with using the log link with Gaussian. 
+
+3. In addition to being funky, as you have probably discovered, count data also don't always behave for the Poisson (which you've explored using the ziformula call.) If data are over-dispersed (a different and sometimes related problem to zero inflation), the negative binomial family (an extenstion of Poisson) is great. More overdispersion fixes and resources here: 
+https://bbolker.github.io/mixedmodels-misc/glmmFAQ.html
+
+4. Model selection is a really subjective process, but I have tried to adopt the format that Zuur goes through in the Mixed Models book. 
+  a. Choose a random effects structure, 
+  
+  b. then fit a full model and every nested iteration of the terms in that full model (discovered the dredge() function from MuMIN for this!).
+  
+  c. Then, check that model meets assumptions (e.g. using DHARMa), if model doesn't meet assumptions (e.g. overdispersion or zero-inflation), then correct for these issues (I usually try to fix overdispersion first because it often fixes zero-inflation issues.)
+  
+  + here it's important to note, once you know your data are zero-inflated and/or overdispersed, models that don't include ways to correct these, regardless of AICc values, are no longer in the running as valid representations of the data (because they don't capture these data weirdnesses), so going forward you will repeat the steps in b. above to fit a new model that hopefully corrects your data weirdness, and do model selection on this group of models. (Let me know if this doesn't make sense, I feel like it took me a REALLY long time to connect these dots, and then there are so many opinions on StackOverflow that it can be easy to get lost in the weeds and in people's opinions on best practice. The most important thing is to bring your brain to the game in any statistical process.)
+  
+4. Once you've got a model that meets assumptions, you can do post-hoc tests (if appropriate) or find marginal or conditional R^2 values for these models or do whatever you want to do with those models. I never model average (another question you had), but have seen others do it. I usually base my model selection on AICc values that are 2 or more AIC values lower than other models. If there isn't a "best" model with this cutoff, I always take the model with the fewest terms. You'll sometimes find in those cases that it's worth checking those model assumptions again, because you might find that the more complex model actually fixes some dispersion in the data that the more simple model doesn't fix.
+

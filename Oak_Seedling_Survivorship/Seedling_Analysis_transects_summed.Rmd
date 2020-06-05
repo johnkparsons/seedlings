@@ -9,7 +9,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
-#install.packages("broom")
+#install.packages("emmeans")
 library(tidyverse) #ggplot
 library(dplyr) #data transformation
 library(readr)
@@ -24,6 +24,8 @@ library(sjPlot) #model output table
 library(DHARMa) #model diagnostics
 library(glmmADMB) #alternate package for GLMM - interested in using MCMC
 library(broom)
+library(effects)
+library(emmeans)
 ```
 
 # Data Tidying/Transformations
@@ -167,7 +169,7 @@ june18_dat %>%
     bar_plot +
     error_bars +
     labs(x = "Climate Site", 
-         y = "Average Number of Seedlings per Transect", 
+         y = "Average Number of Seedlings per Plot", 
          title = "Number of Seedlings by Climate Site and Grazing Treatment", 
          fill = "Grazing Treatment")
 
@@ -179,7 +181,7 @@ june18_dat %>%
   ggplot(aes(x = Plot, y = y)) +
     bar_plot +
     error_bars
-#cattle = fewer seedlings
+#more herbivores = fewer seedlings
 
 #grouped by site only:
 june18_dat %>% 
@@ -189,20 +191,22 @@ june18_dat %>%
   ggplot(aes(x = Site, y = y)) +
     bar_plot +
     error_bars
-#Arid and Mesic roughly the same, Interm has 50% more
+#no big differences here
 
 ggplot(june18_dat, aes(x = Site, y = total, fill = Plot)) +
   geom_boxplot()
 ```
 
 ### Modelling Total Seedling Abundance
+
+Optimal Fixed Effects Structure and Distribution:
 ```{r}
 #no zeroes in summed count data (see above)
 #start with truncated poisson distribution:
-total_mod1 <- glmmTMB(total ~ Site*Plot + (1|RE), data = june18_dat, family = truncated_poisson)
+total_mod <- glmmTMB(total ~ Site*Plot + (1|RE), data = june18_dat, family = truncated_poisson)
 
 #also test other distributions:
-fam.list <- list(family = alist(
+fam_list <- list(family = alist(
     truncpois = truncated_poisson,
     genpois = genpois,
     poisson = poisson,
@@ -211,28 +215,48 @@ fam.list <- list(family = alist(
     ))
 
 #find optimal fixed effects structure and distribution:
-dredge(total_mod1, varying = fam.list)
+dredge(total_mod, varying = fam_list)
+#best model is Plot-only with negative binomial 2 distribution:
+total_mod1 <- update(total_mod, ~ Plot + (1|RE), family = nbinom2)
+summary(total_mod1)
 ```
 
+Testing Random Effects:
 ```{r}
 #do random effects improve fit?
-total_mod4 <- glmmTMB(total ~ Site*Plot, data = june18_dat, family = truncated_poisson)
+total_mod2 <- glmmTMB(total ~ Plot, data = june18_dat, family = nbinom2)
 
-model.sel(list(total_mod2.1, total_mod4))
-#random effects improve fit
+model.sel(list(total_mod1, total_mod2))
+#random effects don't improve fit, might want to keep anyways (integral part of experimental design, see Bolker et al. 2009)
 
 #testing random slopes
-#total_mod8 <- glmmTMB(total ~ Site*Plot + (1 + Site|Block/Transect), data = june18_dat, family = genpois)
+total_mod3 <- glmmTMB(total ~ Plot + (1 + Site|RE), data = june18_dat, family = nbinom2)
 #fails to converge
-#total_mod9 <- glmmTMB(total ~ Site*Plot + (1 + Site|Block), data = june18_dat, family = genpois)
-#fails to converge
-#total_mod10 <- glmmTMB(total ~ Site*Plot + (Plot|Block/Transect), data = june18_dat, family = genpois)
-#fails to converge
-#total_mod11 <- glmmTMB(total ~ Site*Plot + (Plot|Block), data = june18_dat, family = genpois)
-#singular convergence
+```
 
-#no random slope models available w/out further troubleshooting
+DHARMa Diagnostics:
+```{r}
+total_sim <- simulateResiduals(fittedModel = total_mod1, plot = F, n = 1000)
+hist(total_sim)
+testResiduals(total_sim, plot = T)
+#uniformity, dispersion, and outlier tests all non-significant
+#looks to be overdispersed based on QQ
+```
 
+Testing Effects
+```{r}
+plot(allEffects(total_mod1))
+# O > W > WC
+
+pairs(emmeans(total_mod1, "Plot"))
+# O - WC is only significant pairwise difference
+
+ggplot(june18_dat, aes(x = Plot, y = total)) +
+  geom_boxplot() + theme_bw()
+```
+
+probably won't keep this chunk:
+```{r}
 #importance of Plot
 model.sel(list(total_mod5, total_mod6))
 #delta AIC = 22.9
@@ -258,21 +282,6 @@ anova(total_mod2.1, total_mod5)
 #full model with generalized poisson distribution and WITHOUT interaction is best (may want to average the two models):
 total_mod <- total_mod5
 summary(total_mod)
-
-#DHARMa Diagnostics:
-
-simulationOutput <- simulateResiduals(fittedModel = total_mod, plot = T, n = 1000)
-hist(simulationOutput)
-
-testResiduals(simulationOutput, plot = T)
-#uniformity, dispersion, and outlier tests all significant
-#looks to be underdispersed based on QQ
-
-testZeroInflation(simulationOutput)
-
-tab_model(total_mod)
-#tidy(total_mod)
-#No tidy method for objects of class glmmTMB
 ```
 
 ### Trying glmmADMB on total seedling data
@@ -284,24 +293,6 @@ total_admb3 <- glmmadmb(total ~ Site * Plot + (1|Block/Transect), data = june18_
 #really slow
 ```
 
-### Two-way ANOVA, total seedlings
-```{r}
-shapiro.test(june18_dat$total)
-#non-normal
-
-table(june18_dat$Site, june18_dat$Plot)
-
-aov1 <- aov(seedlings ~ Plot * Site, data = june18_dat)
-summary(aov1)
-#looks like both Plot and Site have significant effect, and their interaction
-
-TukeyHSD(aov1)
-plot(aov1, 1)
-leveneTest(seedlings ~ Plot * Site, data = june18_dat)
-#non-homogenous variance
-plot(aov1, 2)
-#definitely not normal
-```
 ## Living Seedling Abundance
 
 ### Exploratory Visualizations
@@ -507,7 +498,7 @@ ggplot(june18_dat, aes(x = Plot, y = Site, fill = dead)) +
 #histogram of proportion dead
 ggplot(june18_dat, aes(x = prop_dead)) +
   geom_histogram()
-#very interesting - most transects are either 0 or 100% dead
+#very interesting - most plots have 0-10% dead
 
 #proportion dead by plot and site
 june18_dat %>% 
@@ -522,7 +513,7 @@ june18_dat %>%
          title = "Seedling Death by Climate Site and Grazing Treatment", 
          fill = "Grazing Treatment") +
     scale_fill_brewer(palette = "Dark2")
-#arid has way higher proportion of dead saplings than other climate sites
+#arid has way higher proportion of dead seedlings than other climate sites
 
 #proportion dead by site only
 june18_dat %>% 
@@ -541,46 +532,38 @@ june18_dat %>%
   ggplot(aes(x = Plot, y = y)) +
     bar_plot +
     error_bars
-#potentially sig. dif. between O and W/WC
-#O has lowest death rate - compare this to herbivory presence
+#very similar across grazing treatments
 ```
 
 ### Modelling Proportion Dead
+
+Optimal Fixed Effects Structure and Distribution:
 ```{r}
-june18_dat$prop_dead <- round(june18_dat$prop_dead)
-june18_dat$prop_dead <- as.factor(as.numeric(june18_dat$prop_dead))
+june18_dat <- june18_dat %>% mutate(no_ones = ifelse(prop_dead == 1, 0.999, prop_dead))
+#start with ZI beta distribution (not sure what other distributions are appropriate):
+prop_mod <- glmmTMB(no_ones ~ Site*Plot + (1|RE), ziformula = ~ (1|Site), data = june18_dat, family = beta_family())
+#needs troubleshooting before proceeding?
 
-#best binomial link?
-dead_mod1 <- glmmTMB(prop_dead ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
-dead_mod_probit <- glmmTMB(prop_dead ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = binomial(link = "probit"))
+zi_list <- list(ziformula = alist(
+    zi1 = ~ 1,
+    zisite = ~ (1|Site)
+    ))
 
-mods <- list(dead_mod1, dead_mod_probit)
-model.sel(mods)
-#logit is better
+#find optimal fixed effects structure and distribution:
+dredge(prop_mod, varying = zi_list)
+#FULL MODELS DONT CONVERGE!!!
+#site-only with zi ~ (1|Site) is best model that does converge - fits with initial observation that proportion dead varies with site but not plot
 
-#does ZI improve fit?
-dead_mod2 <- glmmTMB(prop_dead ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = "binomial", ziformula = ~1)
+prop_mod1 <- update(prop_mod, ~ Site + (1|RE))
+summary(prop_mod1)
+```
 
-mods <- list(dead_mod1, dead_mod2)
-model.sel(mods)
-#non-ZI is better fit
+do random effects improve fit?
+```{r}
+prop_mod2 <- glmmTMB(no_ones ~ Site, ziformula = ~(1|Site), data = june18_dat, family = beta_family())
 
-#do random effects improve fit?
-dead_mod3 <- glmmTMB(prop_dead ~ Site*Plot, data = june18_dat, family = "binomial")
-
-mods <- list(dead_mod1, dead_mod3)
-model.sel(mods)
-#random effects improve fit
-
-#which fixed effects improve fit?
-dead_mod4 <- glmmTMB(prop_dead ~ Site + Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
-dead_mod5 <- glmmTMB(prop_dead ~ Site + (1|Block/Transect), data = june18_dat, family = "binomial")
-dead_mod6 <- glmmTMB(prop_dead ~ Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
-dead_mod_null <- glmmTMB(prop_dead ~ (1|Block/Transect), data = june18_dat, family = "binomial")
-
-mods <- list(dead_mod1, dead_mod4, dead_mod5, dead_mod6, dead_mod_null)
-model.sel(mods)
-#full model w/interaction has best fit
+model.sel(list(prop_mod1, prop_mod2))
+#random effects don't improve fit
 
 #testing random slopes
 #dead_mod7 <- glmmTMB(prop_dead ~ Site*Plot + (1 + Site|Block/Transect), data = june18_dat, family = "binomial")
@@ -593,7 +576,30 @@ model.sel(mods)
 #fails to converge
 
 #no random slope models available
+```
 
+DHARMa Diagnostics:
+```{r}
+prop_dead_sim <- simulateResiduals(fittedModel = prop_mod1, plot = F, n = 1000)
+hist(prop_dead_sim)
+testResiduals(prop_dead_sim, plot = T)
+#uniformity, dispersion, and outlier tests all non-significant
+```
+
+Testing Effects
+```{r}
+plot(allEffects(prop_mod1))
+#not sure why this doesn't work
+
+pairs(emmeans(prop_mod1, "Site"))
+# Arid-Interm and Arid-Mesic are significantly different
+
+ggplot(june18_dat, aes(x = Site, y = prop_dead)) +
+  geom_boxplot() + theme_bw()
+```
+
+
+```{r}
 #importance of Plot
 mods <- list(dead_mod4, dead_mod5)
 model.sel(mods)
@@ -700,6 +706,7 @@ june18_dat %>%
     geom_bar(stat = "identity", position = "stack")
 #aboveground herbivory roughly the same in O and W, much more in WC
 ```
+
 ### Modeling Herbivory Occurrence
 ```{r}
 #test links

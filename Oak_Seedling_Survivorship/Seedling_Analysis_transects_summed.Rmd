@@ -1,0 +1,814 @@
+---
+title: "Seedling Analysis"
+author: "John Parsons"
+date: "5/17/2020"
+output: html_document
+---
+
+# Load Required Packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install.packages("broom")
+library(tidyverse) #ggplot
+library(dplyr) #data transformation
+library(readr)
+library(lubridate) #date manipulation
+library(ggpubr)
+library(car)
+library(RColorBrewer) #plot colors
+library(MuMIn) #model.sel, dredge
+library(glmmTMB) #GLMMs
+#library(jtools) #model analysis
+library(sjPlot) #model output table
+library(DHARMa) #model diagnostics
+library(glmmADMB) #alternate package for GLMM - interested in using MCMC
+library(broom)
+```
+
+# Data Tidying/Transformations
+```{r}
+#read in data
+june18_dat <- read.csv("data_raw/SeedlingTransectDataRawSummer18.csv", header = TRUE, na.strings = "")
+str(june18_dat)
+
+#remove blank rows and columns
+june18_dat <- june18_dat %>% 
+  dplyr::select(-17, -18, -19) %>% 
+  slice(3:nrow(june18_dat))
+
+#move first row to column names and remove first row
+colnames(june18_dat) <- as.matrix(june18_dat[1,])
+june18_dat <- slice(june18_dat, 2:nrow(june18_dat))
+
+#get rid of unused levels
+june18_dat <- droplevels(june18_dat)
+june18_dat$Site <- dplyr::recode(june18_dat$Site, "Intermediate " = "Intermediate", "Mesic " = "Mesic")
+june18_dat$Plot <- dplyr::recode(june18_dat$Plot, "1" = "O", "2" = "W", "3" = "WC")
+
+#fill out all rows of first three columns
+june18_dat <- fill(june18_dat, 1:3, .direction = "down")
+
+#fix names
+june18_dat <- june18_dat %>% 
+  dplyr::rename(seedlings = 8,
+                after_1st_yr = 9,
+                old_seedlings = 10,
+                alive_dess = 13,
+                dead_dess = 14,
+                herb_above = 15,
+                herb_below = 16)
+
+#convert factors to numeric
+june18_dat <- june18_dat %>% 
+  mutate_at(c("seedlings", "after_1st_yr", "old_seedlings", "dead", "clump", "alive_dess", "dead_dess", "herb_above", "herb_below"), as.character) %>% 
+  mutate_at(c("seedlings", "after_1st_yr", "old_seedlings", "dead", "clump", "alive_dess", "dead_dess", "herb_above", "herb_below"), as.numeric)
+
+#replace na's with 0's
+june18_dat[is.na(june18_dat)] <- 0
+
+#sum across transects
+june18_dat <- june18_dat %>% 
+  dplyr::group_by(Year, Month, Site, Block, Plot) %>% 
+  summarise(seedlings = sum(seedlings), after_1st_yr = sum(after_1st_yr), old_seedlings = sum(old_seedlings), dead = sum(dead), clump = sum(clump), alive_dess = sum(alive_dess), dead_dess = sum(dead_dess), herb_above = sum(herb_above), herb_below = sum(herb_below))
+
+#add Random Effect ID for block within site
+june18_dat <- june18_dat %>% 
+  mutate(RE = paste(Site, Block, sep = "_"))
+
+#new column for clump presence/absence
+june18_dat <- june18_dat %>% 
+  mutate(clump_YN = if_else(clump == 0, 0, 1))
+june18_dat$clump_YN <- as.factor(june18_dat$clump_YN)
+
+#new column for large herbivore presence (W or WC)
+june18_dat <- june18_dat %>% 
+  mutate(grazed_YN = if_else(Plot == "O", 0, 1))
+june18_dat$grazed_YN <- as.factor(june18_dat$grazed_YN)
+
+#new columns for total seedlings, alive seedlings and proportion dead
+june18_dat <- june18_dat %>% 
+  mutate(total = seedlings + after_1st_yr + old_seedlings) %>% 
+  mutate(alive = total - dead) %>% 
+  mutate(prop_dead = (dead/total))
+
+#new columns for aboveground, belowground, and overall herbivory occurrence
+june18_dat <- june18_dat %>% 
+  mutate(above_YN = if_else(herb_above == 0, 0, 1)) %>%
+  mutate(below_YN = if_else(herb_below == 0, 0, 1)) %>% 
+  mutate(herb_YN = if_else(above_YN == 1, 1, if_else(below_YN == 1, 1, 0))) 
+june18_dat$above_YN <- as.factor(june18_dat$above_YN)
+june18_dat$below_YN <- as.factor(june18_dat$below_YN)
+june18_dat$herb_YN <- as.factor(june18_dat$herb_YN)
+
+#write tidy data to .csv
+june18_sum_tidy <- write.csv(june18_dat, "data/june18_sum.csv", row.names = FALSE)
+```
+
+# Analyses and Visualizations
+
+## Total Seedling Abundance
+
+### Exploratory Visualizations
+```{r}
+#these visualizations correspond to seedling establishment (includes both alive and dead seedlings)
+#see next chunk for visualizations of living seedlings only (seedling survival)
+
+ggplot(june18_dat, aes(x = total))+
+  geom_histogram(binwidth = 10)
+
+ggplot(june18_dat, aes(x = total)) +
+  stat_ecdf(geom = "step")
+
+#total seedling abundance by site and plot:
+june18_plot <- june18_dat %>% 
+  dplyr::group_by(Site, Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(total))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = Plot)) +
+    geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+    geom_errorbar(aes(ymax = ymax, ymin = ymin),
+                  position = position_dodge(width = 0.9),
+                  width = 0.2) +
+    labs(x = "Climate Site", 
+         y = "Average Number of Seedlings per Plot", 
+         title = "Number of Seedlings by Climate Site and Grazing Treatment", 
+         fill = "Grazing Treatment")
+june18_plot
+ggsave("plots/june18_plot.png", width = 10, height = 7)
+
+#save settings for other charts
+bar_plot <- geom_bar(stat = "identity", position = position_dodge(width = 0.9))
+error_bars <- geom_errorbar(aes(ymax = ymax, ymin = ymin),
+                                position = position_dodge(width = 0.9),
+                                width = 0.2)
+
+#same plot as above but as dotplot:
+june18_dotplot <- june18_dat %>% 
+  dplyr::group_by(Site, Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(total))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, color = Plot)) +
+    geom_point(size = 1.5) +
+    geom_path(aes(group = Plot), linetype = 2) +
+    geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.1) +
+    labs(x = "Climate Site", 
+         y = "Average Number of Seedlings per Transect", 
+         title = "Number of Seedlings by Climate Site and Grazing Treatment", 
+         fill = "Grazing Treatment")
+june18_dotplot
+
+#grouped by grazed Y/N instead of plot:
+june18_dat %>% 
+  dplyr::group_by(Site, grazed_YN) %>% 
+  dplyr::summarize(mean = list(mean_se(total))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = grazed_YN)) +
+    bar_plot +
+    error_bars +
+    labs(x = "Climate Site", 
+         y = "Average Number of Seedlings per Transect", 
+         title = "Number of Seedlings by Climate Site and Grazing Treatment", 
+         fill = "Grazing Treatment")
+
+#grouped by plot only:
+june18_dat %>% 
+  dplyr::group_by(Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(total))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Plot, y = y)) +
+    bar_plot +
+    error_bars
+#cattle = fewer seedlings
+
+#grouped by site only:
+june18_dat %>% 
+  dplyr::group_by(Site) %>% 
+  dplyr::summarize(mean = list(mean_se(total))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y)) +
+    bar_plot +
+    error_bars
+#Arid and Mesic roughly the same, Interm has 50% more
+
+ggplot(june18_dat, aes(x = Site, y = total, fill = Plot)) +
+  geom_boxplot()
+```
+
+### Modelling Total Seedling Abundance
+```{r}
+#no zeroes in summed count data (see above)
+#start with truncated poisson distribution:
+total_mod1 <- glmmTMB(total ~ Site*Plot + (1|RE), data = june18_dat, family = truncated_poisson)
+
+#also test other distributions:
+fam.list <- list(family = alist(
+    truncpois = truncated_poisson,
+    genpois = genpois,
+    poisson = poisson,
+    nbinom1 = nbinom1,
+    nbinom2 = nbinom2
+    ))
+
+#find optimal fixed effects structure and distribution:
+dredge(total_mod1, varying = fam.list)
+```
+
+```{r}
+#do random effects improve fit?
+total_mod4 <- glmmTMB(total ~ Site*Plot, data = june18_dat, family = truncated_poisson)
+
+model.sel(list(total_mod2.1, total_mod4))
+#random effects improve fit
+
+#testing random slopes
+#total_mod8 <- glmmTMB(total ~ Site*Plot + (1 + Site|Block/Transect), data = june18_dat, family = genpois)
+#fails to converge
+#total_mod9 <- glmmTMB(total ~ Site*Plot + (1 + Site|Block), data = june18_dat, family = genpois)
+#fails to converge
+#total_mod10 <- glmmTMB(total ~ Site*Plot + (Plot|Block/Transect), data = june18_dat, family = genpois)
+#fails to converge
+#total_mod11 <- glmmTMB(total ~ Site*Plot + (Plot|Block), data = june18_dat, family = genpois)
+#singular convergence
+
+#no random slope models available w/out further troubleshooting
+
+#importance of Plot
+model.sel(list(total_mod5, total_mod6))
+#delta AIC = 22.9
+anova(total_mod5, total_mod6)
+#p < 0.001
+
+#importance of Site
+model.sel(list(total_mod5, total_mod7))
+#delta AIC = 41.57
+#Site explains more variation than Plot?
+anova(total_mod5, total_mod7)
+#p < 0.001
+
+#importance of interaction
+model.sel(list(total_mod2.1, total_mod5))
+#delta AIC = 1.31
+#NO INTERACTION MODEL IS BETTER
+anova(total_mod2.1, total_mod5)
+#p = 0.1461 (not a sig diff between P+S and P*S)
+
+#Site and Plot improve model fit, interaction is slightly worse than no interaction
+
+#full model with generalized poisson distribution and WITHOUT interaction is best (may want to average the two models):
+total_mod <- total_mod5
+summary(total_mod)
+
+#DHARMa Diagnostics:
+
+simulationOutput <- simulateResiduals(fittedModel = total_mod, plot = T, n = 1000)
+hist(simulationOutput)
+
+testResiduals(simulationOutput, plot = T)
+#uniformity, dispersion, and outlier tests all significant
+#looks to be underdispersed based on QQ
+
+testZeroInflation(simulationOutput)
+
+tab_model(total_mod)
+#tidy(total_mod)
+#No tidy method for objects of class glmmTMB
+```
+
+### Trying glmmADMB on total seedling data
+```{r}
+total_admb1 <- glmmadmb(total ~ Site * Plot + (1|Block/Transect), data = june18_dat, family = "poisson")
+total_admb2 <- glmmadmb(total ~ Site * Plot + (1|Block/Transect), data = june18_dat, family = "nbinom")
+total_admb3 <- glmmadmb(total ~ Site * Plot + (1|Block/Transect), data = june18_dat, family = "poisson", zeroInflation = T)
+
+#really slow
+```
+
+### Two-way ANOVA, total seedlings
+```{r}
+shapiro.test(june18_dat$total)
+#non-normal
+
+table(june18_dat$Site, june18_dat$Plot)
+
+aov1 <- aov(seedlings ~ Plot * Site, data = june18_dat)
+summary(aov1)
+#looks like both Plot and Site have significant effect, and their interaction
+
+TukeyHSD(aov1)
+plot(aov1, 1)
+leveneTest(seedlings ~ Plot * Site, data = june18_dat)
+#non-homogenous variance
+plot(aov1, 2)
+#definitely not normal
+```
+## Living Seedling Abundance
+
+### Exploratory Visualizations
+```{r}
+#these visualizations correspond to seedling survival
+
+ggplot(june18_dat, aes(x = alive))+
+  geom_histogram(binwidth = 1)
+
+ggplot(june18_dat, aes(x = alive)) +
+  stat_ecdf(geom = "step")
+
+#living seedling abundance by site and plot:
+june18_alive_plot <- june18_dat %>% 
+  dplyr::group_by(Site, Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(alive))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = Plot)) +
+    geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+    geom_errorbar(aes(ymax = ymax, ymin = ymin),
+                  position = position_dodge(width = 0.9),
+                  width = 0.2) +
+    labs(x = "Climate Site", 
+         y = "Average Number of Living Seedlings per Transect", 
+         title = "Number of Living Seedlings by Climate Site and Grazing Treatment", 
+         fill = "Grazing Treatment")
+june18_alive_plot
+ggsave("plots/june18_alive_plot.png", width = 10)
+
+#grouped by grazed Y/N instead of plot:
+june18_dat %>% 
+  dplyr::group_by(Site, grazed_YN) %>% 
+  dplyr::summarize(mean = list(mean_se(alive))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = grazed_YN)) +
+    bar_plot +
+    error_bars +
+    labs(x = "Climate Site", 
+         y = "Average Number of Seedlings per Transect", 
+         title = "Number of Seedlings by Climate Site and Grazing Treatment", 
+         fill = "Grazing Treatment" )
+
+#grouped by plot only:
+june18_dat %>% 
+  dplyr::group_by(Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(alive))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Plot, y = y)) +
+    bar_plot +
+    error_bars
+
+#grouped by site only:
+june18_dat %>% 
+  dplyr::group_by(Site) %>% 
+  dplyr::summarize(mean = list(mean_se(alive))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y)) +
+    bar_plot +
+    error_bars
+#all three sites are different - unlike total seedlings
+#arid vs mesic affects survival, not establishment?
+
+ggplot(june18_dat, aes(x = Site, y = alive, fill = Plot)) +
+  geom_boxplot()
+```
+
+### Modeling Living Seedling Abundance
+```{r}
+#determine best family
+alive_mod1 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = gaussian)
+alive_mod2 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = poisson)
+alive_mod3 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois)
+#alive_mod4 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = compois)
+#doesnt work
+
+model.sel(list(alive_mod1, alive_mod2, alive_mod3))
+#generalized poisson is best distribution
+
+#testing ZI
+alive_mod5 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~1)
+alive_mod6 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~(1|Block/Transect))
+#NA function eval/convergence problem
+alive_mod7 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~(1|Block))
+#convergence problem
+
+model.sel(list(alive_mod3, alive_mod5))
+#non-ZI is better, delta = 2.04
+
+#do random effects imrpove model fit?
+alive_mod8 <- glmmTMB(alive ~ Site*Plot, data = june18_dat, family = genpois)
+
+model.sel(list(alive_mod3, alive_mod8))
+#random effects do improve fit
+
+#which fixed effects improve fit?
+alive_mod9 <- glmmTMB(alive ~ Site + Plot + (1|Block/Transect), data = june18_dat, family = genpois)
+alive_mod10 <- glmmTMB(alive ~ Site + (1|Block/Transect), data = june18_dat, family = genpois)
+alive_mod11 <- glmmTMB(alive ~ Plot + (1|Block/Transect), data = june18_dat, family = genpois)
+#all above models throw NA function eval, but no convergence issues
+alive_mod_null <- glmmTMB(alive ~ (1|Block/Transect), data = june18_dat, family = genpois)
+
+model.sel(list(alive_mod3, alive_mod9, alive_mod10, alive_mod11, alive_mod_null))
+#full model is best
+
+#importance of Site
+model.sel(list(alive_mod9, alive_mod11))
+#delta AIC = 381.43
+anova(alive_mod9, alive_mod11)
+#p < 0.001
+
+#importance of Plot
+model.sel(list(alive_mod9, alive_mod10))
+#delta AIC = 6.37
+anova(alive_mod9, alive_mod10)
+#p < 0.005
+
+#importance of interaction
+model.sel(list(alive_mod3, alive_mod9))
+#delta AIC = 52.75
+anova(alive_mod3, alive_mod9)
+#p < 0.001
+
+#full model with generalized poisson distribution is best fit:
+alive_mod <- alive_mod3
+
+#DHARMa Diagnostics:
+
+alive_sim <- simulateResiduals(fittedModel = alive_mod, plot = T, n = 1000)
+hist(alive_sim)
+
+testResiduals(alive_sim, plot = T)
+#uniformity, dispersion, and outlier tests all significant
+#looks to be underdispersed based on QQ
+
+testZeroInflation(alive_sim)
+#looks to be ZI?
+
+tab_model(alive_mod)
+#tidy(total_mod)
+#No tidy method for objects of class glmmTMB
+```
+
+### Exploratory Visualizations: Clumps
+```{r}
+ggplot(june18_dat, aes(x = clump))+
+  geom_histogram()
+#mostly zero or one
+
+ggplot(june18_dat, aes(x = clump_YN))+
+  geom_histogram(stat = "count")
+ 
+#clump presence by site and plot
+june18_clump_plot <- june18_dat %>% 
+  dplyr::group_by(Site, Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(clump_YN))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = Plot)) +
+    bar_plot +
+    error_bars +
+    labs(x = "Climate Site", 
+         y = "Proportion of Transects with Clumps", 
+         title = "Presence of Clumps by Climate Site and Grazing Treatment", 
+         fill = "Grazing Treatment")
+june18_clump_plot
+ggsave("plots/june18_clump_plot.png", width = 10)
+```
+
+### Two-way ANOVA, clumps
+```{r}
+shapiro.test(june18_dat$clump_YN)
+#non-normal
+
+table(june18_dat$Site, june18_dat$grazed_YN)
+
+aov2 <- aov(clump_YN ~ grazed_YN * Site, data = june18_dat)
+summary(aov2)
+#looks like both Plot and Site have significant effect, and their interaction
+
+TukeyHSD(aov2)
+#significant differences between plots and between sites
+
+plot(aov2, 1)
+
+leveneTest(clump_YN ~ grazed_YN * Site, data = june18_dat)
+#non-homogenous variance
+
+plot(aov2, 2)
+#definitely not normal
+```
+
+### Exploratory Visualizations, seedling death
+```{r}
+ggplot(june18_dat, aes(x = dead)) +
+  geom_histogram()
+
+ggplot(june18_dat, aes(x = total, y = prop_dead)) + 
+  geom_point() +
+  geom_smooth()
+
+ggplot(june18_dat, aes(x = Plot, y = Site, fill = dead)) +
+  geom_tile()
+
+#histogram of proportion dead
+ggplot(june18_dat, aes(x = prop_dead)) +
+  geom_histogram()
+#very interesting - most transects are either 0 or 100% dead
+
+#proportion dead by plot and site
+june18_dat %>% 
+  dplyr::group_by(Site, Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = Plot)) +
+    bar_plot +
+    error_bars +
+    labs(x = "Climate Site", 
+         y = "Proportion of Seedlings Dead", 
+         title = "Seedling Death by Climate Site and Grazing Treatment", 
+         fill = "Grazing Treatment") +
+    scale_fill_brewer(palette = "Dark2")
+#arid has way higher proportion of dead saplings than other climate sites
+
+#proportion dead by site only
+june18_dat %>% 
+  dplyr::group_by(Site) %>% 
+  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y)) +
+    bar_plot +
+    error_bars
+
+#proportion dead by plot only
+june18_dat %>% 
+  dplyr::group_by(Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Plot, y = y)) +
+    bar_plot +
+    error_bars
+#potentially sig. dif. between O and W/WC
+#O has lowest death rate - compare this to herbivory presence
+```
+
+### Modelling Proportion Dead
+```{r}
+june18_dat$prop_dead <- round(june18_dat$prop_dead)
+june18_dat$prop_dead <- as.factor(as.numeric(june18_dat$prop_dead))
+
+#best binomial link?
+dead_mod1 <- glmmTMB(prop_dead ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
+dead_mod_probit <- glmmTMB(prop_dead ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = binomial(link = "probit"))
+
+mods <- list(dead_mod1, dead_mod_probit)
+model.sel(mods)
+#logit is better
+
+#does ZI improve fit?
+dead_mod2 <- glmmTMB(prop_dead ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = "binomial", ziformula = ~1)
+
+mods <- list(dead_mod1, dead_mod2)
+model.sel(mods)
+#non-ZI is better fit
+
+#do random effects improve fit?
+dead_mod3 <- glmmTMB(prop_dead ~ Site*Plot, data = june18_dat, family = "binomial")
+
+mods <- list(dead_mod1, dead_mod3)
+model.sel(mods)
+#random effects improve fit
+
+#which fixed effects improve fit?
+dead_mod4 <- glmmTMB(prop_dead ~ Site + Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
+dead_mod5 <- glmmTMB(prop_dead ~ Site + (1|Block/Transect), data = june18_dat, family = "binomial")
+dead_mod6 <- glmmTMB(prop_dead ~ Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
+dead_mod_null <- glmmTMB(prop_dead ~ (1|Block/Transect), data = june18_dat, family = "binomial")
+
+mods <- list(dead_mod1, dead_mod4, dead_mod5, dead_mod6, dead_mod_null)
+model.sel(mods)
+#full model w/interaction has best fit
+
+#testing random slopes
+#dead_mod7 <- glmmTMB(prop_dead ~ Site*Plot + (1 + Site|Block/Transect), data = june18_dat, family = "binomial")
+#fails to converge
+#dead_mod7 <- glmmTMB(prop_dead ~ Site*Plot + (1 + Site|Block), data = june18_dat, family = "binomial")
+#fails to converge
+#dead_mod8 <- glmmTMB(prop_dead ~ Site*Plot + (Plot|Block/Transect), data = june18_dat, family = "binomial")
+#fails to converge
+#dead_mod8 <- glmmTMB(prop_dead ~ Site*Plot + (Plot|Block), data = june18_dat, family = "binomial")
+#fails to converge
+
+#no random slope models available
+
+#importance of Plot
+mods <- list(dead_mod4, dead_mod5)
+model.sel(mods)
+#delta AIC = 13.83
+anova(dead_mod4, dead_mod5)
+#p < 0.001
+
+#importance of Site
+mods <- list(dead_mod4, dead_mod6)
+model.sel(mods)
+#delta AIC = 774.56
+anova(dead_mod4, dead_mod6)
+#p < 0.001
+
+#importance of interaction
+mods <- list(dead_mod1, dead_mod4)
+model.sel(mods)
+#delta AIC = 4.66
+anova(dead_mod1, dead_mod4)
+#p < 0.05
+
+#Site, Plot, and their interaction all improve model fit
+
+#best model is full model with interaction:
+dead_mod <- dead_mod1
+summary(dead_mod)
+
+#DHARMa Diagnostics:
+
+simulationOutput <- simulateResiduals(fittedModel = dead_mod, plot = F, n = 1000)
+hist(simulationOutput)
+
+testResiduals(simulationOutput, plot = T)
+#uniformity and dispersion OK, outlier test significant
+
+tab_model(dead_mod)
+#this is really ugly - I want something like Perea et al.
+```
+
+### Exploratory Visualizations, Herbivory Occurence
+```{r}
+ggplot(june18_dat, aes(x = herb_above)) +
+  geom_histogram()
+
+ggplot(june18_dat, aes(x = herb_below)) +
+  geom_histogram()
+
+#switching to occurrence of any herbivory
+ggplot(june18_dat, aes(x = herb_YN)) +
+  geom_histogram(binwidth = 1)
+
+#occurrence of herbivory by plot and site:
+june18_dat %>% 
+  dplyr::group_by(Site, Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(herb_YN))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = Plot)) +
+    bar_plot +
+    error_bars +
+    labs(x = "Climate Site", 
+         y = "Herbivory Occurence, % of Total Seedlings", 
+         title = "Herbivory by Climate Site and Grazing Treatment", 
+         fill = "Grazing Treatment") +
+    scale_fill_brewer(palette = "Dark2")
+#weird interaction between plot WC and site Mesic, see model table as well
+
+#total herbivory by site only
+june18_dat %>% 
+  dplyr::group_by(Site) %>% 
+  dplyr::summarize(mean = list(mean_se(herb_YN))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y)) +
+    bar_plot +
+    error_bars
+#Arid has way more herbivory - confirms suggestion by L-S
+
+#herbivory by site, split into above- and below- ground
+june18_dat %>% 
+  gather(herb_type, herb, above_YN:below_YN) %>% 
+  dplyr::group_by(Site, herb_type) %>% 
+  dplyr::summarize(mean = list(mean_se(herb))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = herb_type)) +
+    geom_bar(stat = "identity", position = "stack")
+#Arid dominated by below-ground, Mesic and Interm by above-ground
+
+#total herbivory by plot only
+june18_dat %>% 
+  dplyr::group_by(Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(herb_YN))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Plot, y = y)) +
+    bar_plot +
+    error_bars
+#TOTAL herbivory increases with grazing guilds present
+
+#herbivory by plot, split between above- and below- ground
+june18_dat %>% 
+  gather(herb_type, herb, above_YN:below_YN) %>% 
+  dplyr::group_by(Plot, herb_type) %>% 
+  dplyr::summarize(mean = list(mean_se(herb))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Plot, y = y, fill = herb_type)) +
+    geom_bar(stat = "identity", position = "stack")
+#aboveground herbivory roughly the same in O and W, much more in WC
+```
+### Modeling Herbivory Occurrence
+```{r}
+#test links
+herb_mod1 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block/Transect), data = june18_dat, family = "binomial")
+herb_mod2 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block/Transect), data = june18_dat, family = binomial(link = "probit"))
+
+model.sel(list(herb_mod1, herb_mod2))
+#logit is better, but delta is only 0.31...
+
+#test ZI
+herb_mod3 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block/Transect), data = june18_dat, family = "binomial", ziformula = ~1)
+
+model.sel(list(herb_mod1, herb_mod3))
+#might want to include ZI, delta is only 1.37...
+
+#test ranef
+herb_mod4 <- glmmTMB(herb_YN ~ Plot*Site, data = june18_dat, family = "binomial")
+
+model.sel(list(herb_mod1, herb_mod4))
+#random effects improve fit
+
+#test fixed effects
+herb_mod5 <- glmmTMB(herb_YN ~ Plot + Site + (1|Block/Transect), data = june18_dat, family = "binomial")
+herb_mod6 <- glmmTMB(herb_YN ~ Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
+herb_mod7 <- glmmTMB(herb_YN ~ Site + (1|Block/Transect), data = june18_dat, family = "binomial")
+herb_mod_null <- glmmTMB(herb_YN ~ (1|Block/Transect), data = june18_dat, family = "binomial")
+
+model.sel(list(herb_mod1, herb_mod5, herb_mod6, herb_mod7, herb_mod_null))
+#full model w/ interaction is best
+
+#importance of Plot
+model.sel(list(herb_mod5, herb_mod7))
+#delta AIC = 15.08
+anova(herb_mod5, herb_mod7)
+#p < 0.001
+
+#importance of Site
+model.sel(list(herb_mod5, herb_mod6))
+#delta AIC = 197.04
+anova(herb_mod5, herb_mod6)
+#p < 0.001
+
+#importance of interaction
+model.sel(list(herb_mod1, herb_mod5))
+#delta AIC = 48.76
+anova(herb_mod1, herb_mod5)
+#p < 0.001
+
+#Site, Plot, and their interaction all improve model fit
+#best model is full model:
+herb_mod <- herb_mod1
+summary(herb_mod)
+
+#DHARMa Diagnostics:
+simulationOutput <- simulateResiduals(fittedModel = herb_mod, plot = F, n = 1000)
+hist(simulationOutput)
+testResiduals(simulationOutput, plot = T)
+#uniformity dispersion and outliers OK
+
+#model results table:
+tab_model(herb_mod)
+```
+
+### Comparing herbivory to death
+```{r}
+june18_dat$herb_YN <- as.factor(as.character(june18_dat$herb_YN))
+
+june18_dat %>%
+  dplyr::group_by(herb_YN) %>% 
+  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+  unnest(mean) %>%
+  ggplot(aes(x = herb_YN, y = y)) +
+    geom_bar(stat = "identity")
+#herbivory results in much higher death rate
+
+june18_dat %>%
+  dplyr::group_by(Site, herb_YN) %>% 
+  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+  unnest(mean) %>%
+  ggplot(aes(x = herb_YN, y = y, fill = Site)) +
+    geom_bar(stat = "identity", position = "dodge")
+#effect of herbivory fairly consistent across climate sites
+
+june18_dat %>%
+  dplyr::group_by(Plot, herb_YN) %>% 
+  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+  unnest(mean) %>%
+  ggplot(aes(x = herb_YN, y = y, fill = Plot)) +
+    geom_bar(stat = "identity", position = "dodge")
+#herbivory increases death rate 4x in O and W, but only 2x in WC - herbivory by cattle not as destructive as herbivory by wildlife? Or presence of cattle somehow decreases herbivory intensity?
+
+june18_dat %>% 
+  gather(herb_type, herb, above_YN:below_YN) %>% 
+  dplyr::group_by(herb_type, herb) %>% 
+  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = herb_type, y = herb, fill = y)) +
+    geom_tile()
+#complex interaction - aboveground herbivory decreases death rate, belowground herbiory increases it
+```
+
+### Adding herbivory to proportion dead model
+```{r}
+dead_mod7 <- glmmTMB(prop_dead ~ Plot*Site + herb_YN + (1|Block/Transect), data = june18_dat, family = "binomial")
+
+model.sel(list(dead_mod, dead_mod7))
+#adding herbivory improves fit
+
+dead_mod8 <- glmmTMB(prop_dead ~ herb_YN + (1|Block/Transect), data = june18_dat, family = "binomial")
+
+model.sel(list(dead_mod, dead_mod8))
+```

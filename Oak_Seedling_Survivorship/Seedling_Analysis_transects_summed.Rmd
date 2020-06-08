@@ -236,13 +236,36 @@ testResiduals(total_sim, plot = T)
 #may be overdispersed based on QQ plot?
 ```
 
+Test other distributions (if necessary?)
+```{r}
+fam_list <- list(family = alist(
+    truncpois = truncated_poisson,
+    genpois = genpois,
+    poisson = poisson,
+    nbinom1 = nbinom1,
+    nbinom2 = nbinom2
+    ))
+
+dredge(total_mod, varying = fam_list)
+#truncated poisson only marginally better than regular poisson
+
+total_mod_pois <- update(total_mod, family = poisson)
+
+total_pois_sim <- simulateResiduals(fittedModel = total_mod_pois, plot = F, n = 1000)
+hist(total_pois_sim)
+testResiduals(total_pois_sim, plot = T)
+#meets assumptions well
+
+model.sel(list(total_mod, total_mod_pois))
+#any benefit to choosing poisson? less transformations of the data required?
+```
+
 Testing Effects (can't really do this with null model)
 ```{r}
 plot(allEffects(total_mod))
 # O > W > WC
 
-pairs(emmeans(total_mod, "Plot"))
-# O - WC is only significant pairwise difference
+pairs(emmeans(total_mod))
 
 ggplot(june18_dat, aes(x = Plot, y = total)) +
   geom_boxplot() + theme_bw()
@@ -281,10 +304,11 @@ summary(total_mod)
 
 ### Exploratory Visualizations
 ```{r}
-#these visualizations correspond to seedling survival
+#these visualizations correspond to seedling survival rate x total seedlings
 
 ggplot(june18_dat, aes(x = alive))+
   geom_histogram(binwidth = 1)
+#looks like negative binomial?
 
 ggplot(june18_dat, aes(x = alive)) +
   stat_ecdf(geom = "step")
@@ -345,42 +369,66 @@ ggplot(june18_dat, aes(x = Site, y = alive, fill = Plot)) +
 
 ### Modeling Living Seedling Abundance
 ```{r}
-#determine best family
-alive_mod1 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = gaussian)
-alive_mod2 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = poisson)
-alive_mod3 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois)
-#alive_mod4 <- glmmTMB(total ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = compois)
-#doesnt work
+#starting with ZI nbinom2:
+alive_mod1 <- glmmTMB(alive ~ Site*Plot + (1|RE), 
+                      data = june18_dat, family = nbinom2(), ziformula = ~ 1)
 
-model.sel(list(alive_mod1, alive_mod2, alive_mod3))
-#generalized poisson is best distribution
+#test random effects:
+alive_mod2 <- update(alive_mod1, ~ Plot*Site) #no RE
+alive_mod3 <- update(alive_mod1, ~ Plot*Site + (1 + Plot|RE)) #random slope of Plot
+alive_mod4 <- update(alive_mod1, ~ Plot*Site + (1 + Site|RE)) #random slope of Site
+alive_mod5 <- update(alive_mod1, ~ Plot*Site + (0 + Plot|RE)) #random slope of Plot, no variation in intercept
+alive_mod6 <- update(alive_mod1, ~ Plot*Site + (0 + Site|RE)) #random slope of Site, no variation in intercept
 
-#testing ZI
-alive_mod5 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~1)
-alive_mod6 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~(1|Block/Transect))
-#NA function eval/convergence problem
-alive_mod7 <- glmmTMB(alive ~ Site*Plot + (1|Block/Transect), data = june18_dat, family = genpois, ziformula = ~(1|Block))
-#convergence problem
+model.sel(list(alive_mod1, alive_mod2))
+#random effects don't improve fit
+```
 
-model.sel(list(alive_mod3, alive_mod5))
-#non-ZI is better, delta = 2.04
+Optimal ZI formula and Fixed Effects
+```{r}
+zi_list <- list(ziformula = alist(
+    zi0 = ~ 0,
+    zi1 = ~ 1,
+    zisite = ~ (1|Site),
+    ziplot = ~ (1|Plot),
+    ziRE = ~ (1|RE)
+    ))
+ 
+dredge(alive_mod1, varying = zi_list, subset = ("cond(Site)" & "cond(Plot)"))
+#not sure how to fix interaction
+#zi = 1 is best
 
-#do random effects imrpove model fit?
-alive_mod8 <- glmmTMB(alive ~ Site*Plot, data = june18_dat, family = genpois)
+dredge(update(alive_mod1, ziformula = ~ 1))
+#Plot-only model is best
 
-model.sel(list(alive_mod3, alive_mod8))
-#random effects do improve fit
+alive_mod <- glmmTMB(alive ~ Plot + (1|RE), ziformula = ~ 1, data = june18_dat, family = nbinom2())
+summary(alive_mod)
+```
 
-#which fixed effects improve fit?
-alive_mod9 <- glmmTMB(alive ~ Site + Plot + (1|Block/Transect), data = june18_dat, family = genpois)
-alive_mod10 <- glmmTMB(alive ~ Site + (1|Block/Transect), data = june18_dat, family = genpois)
-alive_mod11 <- glmmTMB(alive ~ Plot + (1|Block/Transect), data = june18_dat, family = genpois)
-#all above models throw NA function eval, but no convergence issues
-alive_mod_null <- glmmTMB(alive ~ (1|Block/Transect), data = june18_dat, family = genpois)
+DHARMa Diagnostics:
+```{r}
+alive_sim <- simulateResiduals(fittedModel = alive_mod, plot = F, n = 1000)
+hist(alive_sim)
+testResiduals(alive_sim, plot = T)
+#uniformity, dispersion, and outlier tests all non-significant
+```
 
-model.sel(list(alive_mod3, alive_mod9, alive_mod10, alive_mod11, alive_mod_null))
-#full model is best
+Testing Effects
+```{r}
+plot(allEffects(alive_mod))
 
+pairs(emmeans(alive_mod, "Plot"))
+#O-WC and W-WC are significant
+#more alive seedlings in W, despite less total seedlings than O
+
+ggplot(june18_dat, aes(x = Plot, y = alive)) +
+  geom_boxplot() + theme_bw()
+```
+
+
+
+old method
+```{r}
 #importance of Site
 model.sel(list(alive_mod9, alive_mod11))
 #delta AIC = 381.43
@@ -444,29 +492,6 @@ june18_clump_plot
 ggsave("plots/june18_clump_plot.png", width = 10)
 ```
 
-### Two-way ANOVA, clumps
-```{r}
-shapiro.test(june18_dat$clump_YN)
-#non-normal
-
-table(june18_dat$Site, june18_dat$grazed_YN)
-
-aov2 <- aov(clump_YN ~ grazed_YN * Site, data = june18_dat)
-summary(aov2)
-#looks like both Plot and Site have significant effect, and their interaction
-
-TukeyHSD(aov2)
-#significant differences between plots and between sites
-
-plot(aov2, 1)
-
-leveneTest(clump_YN ~ grazed_YN * Site, data = june18_dat)
-#non-homogenous variance
-
-plot(aov2, 2)
-#definitely not normal
-```
-
 ### Exploratory Visualizations, seedling death
 ```{r}
 ggplot(june18_dat, aes(x = dead)) +
@@ -527,7 +552,6 @@ june18_dat <- june18_dat %>% mutate(no_ones = ifelse(prop_dead == 1, 0.999, prop
 #start with ZI beta distribution (not sure what other distributions are appropriate):
 prop_mod1 <- glmmTMB(no_ones ~ Site + Plot + (1|RE), ziformula = ~ 1, data = june18_dat, family = beta_family())
 #needs troubleshooting if interaction is to be included
-getAllTerms(prop_mod1)
 prop_mod2 <- update(prop_mod1, ~ Site + Plot)
 prop_mod3 <- update(prop_mod1, ~ Site + Plot + (1 + Site|RE))
 prop_mod4 <- update(prop_mod1, ~ Site + Plot + (1 + Plot|RE))
@@ -607,7 +631,9 @@ anova(dead_mod1, dead_mod4)
 #best model is full model with interaction:
 dead_mod <- dead_mod1
 summary(dead_mod)
+```
 
+```{r}
 #DHARMa Diagnostics:
 
 simulationOutput <- simulateResiduals(fittedModel = dead_mod, plot = F, n = 1000)
@@ -622,6 +648,8 @@ tab_model(dead_mod)
 
 ### Exploratory Visualizations, Herbivory Occurence
 ```{r}
+june18_dat$herb_YN <- as.numeric(as.character(june18_dat$herb_YN))
+
 ggplot(june18_dat, aes(x = herb_above)) +
   geom_histogram()
 
@@ -630,10 +658,10 @@ ggplot(june18_dat, aes(x = herb_below)) +
 
 #switching to occurrence of any herbivory
 ggplot(june18_dat, aes(x = herb_YN)) +
-  geom_histogram(binwidth = 1)
+  geom_histogram(stat = "count")
 
 #occurrence of herbivory by plot and site:
-june18_dat %>% 
+herb_plot <- june18_dat %>% 
   dplyr::group_by(Site, Plot) %>% 
   dplyr::summarize(mean = list(mean_se(herb_YN))) %>%
   unnest(mean) %>% 
@@ -648,7 +676,7 @@ june18_dat %>%
 #weird interaction between plot WC and site Mesic, see model table as well
 
 #total herbivory by site only
-june18_dat %>% 
+herb_plot_site <- june18_dat %>% 
   dplyr::group_by(Site) %>% 
   dplyr::summarize(mean = list(mean_se(herb_YN))) %>%
   unnest(mean) %>% 
@@ -690,34 +718,51 @@ june18_dat %>%
 
 ### Modeling Herbivory Occurrence
 ```{r}
-#test links
-herb_mod1 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block/Transect), data = june18_dat, family = "binomial")
-herb_mod2 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block/Transect), data = june18_dat, family = binomial(link = "probit"))
+#start with binomial, complimentary log-log due to asymmetric distribution:
+herb_mod1 <- glmmTMB(herb_YN ~ Plot + Site + (1|RE), data = june18_dat, family = binomial(link = "cloglog"))
+#doesn't converge when interaction included
+
+#test random effects
+herb_mod2 <- update(herb_mod1, ~ Site + Plot)
+herb_mod3 <- update(herb_mod1, ~ Site + Plot + (1 + Site|RE))
+herb_mod4 <- update(herb_mod1, ~ Site + Plot + (1 + Plot|RE))
+herb_mod5 <- update(herb_mod1, ~ Site + Plot + (0 + Site|RE))
+herb_mod6 <- update(herb_mod1, ~ Site + Plot + (0 + Plot|RE))
+#no random slope models converged
 
 model.sel(list(herb_mod1, herb_mod2))
-#logit is better, but delta is only 0.31...
-
-#test ZI
-herb_mod3 <- glmmTMB(herb_YN ~ Plot*Site + (1|Block/Transect), data = june18_dat, family = "binomial", ziformula = ~1)
-
-model.sel(list(herb_mod1, herb_mod3))
-#might want to include ZI, delta is only 1.37...
-
-#test ranef
-herb_mod4 <- glmmTMB(herb_YN ~ Plot*Site, data = june18_dat, family = "binomial")
-
-model.sel(list(herb_mod1, herb_mod4))
-#random effects improve fit
+#excluding random effects slightly improves fit
 
 #test fixed effects
-herb_mod5 <- glmmTMB(herb_YN ~ Plot + Site + (1|Block/Transect), data = june18_dat, family = "binomial")
-herb_mod6 <- glmmTMB(herb_YN ~ Plot + (1|Block/Transect), data = june18_dat, family = "binomial")
-herb_mod7 <- glmmTMB(herb_YN ~ Site + (1|Block/Transect), data = june18_dat, family = "binomial")
-herb_mod_null <- glmmTMB(herb_YN ~ (1|Block/Transect), data = june18_dat, family = "binomial")
+dredge(herb_mod1)
+#site-only is best, but null model is almost as good
 
-model.sel(list(herb_mod1, herb_mod5, herb_mod6, herb_mod7, herb_mod_null))
-#full model w/ interaction is best
+herb_mod <- update(herb_mod1, ~ Site + (1|RE))
+summary(herb_mod)
+#none of the terms are significant, is this support for the null model?
+```
 
+
+DHARMa Diagnostics:
+```{r}
+herb_sim <- simulateResiduals(fittedModel = herb_mod, plot = F, n = 1000)
+hist(herb_sim)
+testResiduals(herb_sim, plot = T)
+#uniformity, dispersion, and outlier tests all non-significant
+```
+
+Testing Effects
+```{r}
+plot(allEffects(herb_mod))
+
+pairs(emmeans(herb_mod, "Site"))
+#no significant differences
+
+herb_plot_site
+```
+
+old method
+```{r}
 #importance of Plot
 model.sel(list(herb_mod5, herb_mod7))
 #delta AIC = 15.08

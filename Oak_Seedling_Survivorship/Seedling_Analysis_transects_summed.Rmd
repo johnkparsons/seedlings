@@ -12,6 +12,10 @@ knitr::opts_chunk$set(echo = TRUE)
 #install.packages("emmeans")
 library(tidyverse) #ggplot
 library(dplyr) #data transformation
+group_by <- dplyr::group_by
+summarize <- dplyr::summarise
+select <- dplyr::select
+recode <- dplyr::recode
 library(readr)
 library(lubridate) #date manipulation
 library(ggpubr)
@@ -36,7 +40,7 @@ str(june18_dat)
 
 #remove blank rows and columns
 june18_dat <- june18_dat %>% 
-  dplyr::select(-17, -18, -19) %>% 
+  select(-17, -18, -19) %>% 
   slice(3:nrow(june18_dat))
 
 #move first row to column names and remove first row
@@ -45,8 +49,8 @@ june18_dat <- slice(june18_dat, 2:nrow(june18_dat))
 
 #get rid of unused levels
 june18_dat <- droplevels(june18_dat)
-june18_dat$Site <- dplyr::recode(june18_dat$Site, "Intermediate " = "Intermediate", "Mesic " = "Mesic")
-june18_dat$Plot <- dplyr::recode(june18_dat$Plot, "1" = "O", "2" = "W", "3" = "WC")
+june18_dat$Site <- recode(june18_dat$Site, "Intermediate " = "Intermediate", "Mesic " = "Mesic")
+june18_dat$Plot <- recode(june18_dat$Plot, "1" = "O", "2" = "W", "3" = "WC")
 
 #fill out all rows of first three columns
 june18_dat <- fill(june18_dat, 1:3, .direction = "down")
@@ -95,13 +99,17 @@ june18_dat <- june18_dat %>%
   mutate(alive = total - dead) %>% 
   mutate(prop_dead = (dead/total))
 
-#new columns for aboveground, belowground, and overall herbivory occurrence
+#new columns for above-ground, below-ground, and overall herbivory occurrence, and for proportion of seedlings with above- or below-ground herbivory
 june18_dat <- june18_dat %>% 
   mutate(above_YN = if_else(herb_above == 0, 0, 1)) %>%
   mutate(below_YN = if_else(herb_below == 0, 0, 1)) %>% 
-  mutate(herb_YN = if_else(above_YN == 1, 1, if_else(below_YN == 1, 1, 0))) 
+  mutate(both_herb = if_else((herb_below == 1 | herb_above == 1), 1, 0)) %>% 
+  mutate(herb_YN = if_else(above_YN == 1, 1, if_else(below_YN == 1, 1, 0))) %>% 
+  mutate(above_prop = herb_above/total) %>% 
+  mutate(below_prop = herb_below/total)
 june18_dat$above_YN <- as.factor(june18_dat$above_YN)
 june18_dat$below_YN <- as.factor(june18_dat$below_YN)
+june18_dat$both_herb <- as.factor(june18_dat$both_herb)
 june18_dat$herb_YN <- as.factor(june18_dat$herb_YN)
 
 #write tidy data to .csv
@@ -424,7 +432,12 @@ pairs(emmeans(alive_mod, "Plot"))
 ggplot(june18_dat, aes(x = Plot, y = alive)) +
   geom_boxplot() + theme_bw()
 ```
-
+Testing nbinom1
+```{r}
+alive_mod_nb1 <- update(alive_mod1, family = nbinom1())
+model.sel(list(alive_mod1, alive_mod_nb1))
+#worse fit
+```
 
 
 old method
@@ -553,11 +566,6 @@ june18_dat <- june18_dat %>% mutate(no_ones = ifelse(prop_dead == 1, 0.999, prop
 prop_mod1 <- glmmTMB(no_ones ~ Site + Plot + (1|RE), ziformula = ~ 1, data = june18_dat, family = beta_family())
 #needs troubleshooting if interaction is to be included
 prop_mod2 <- update(prop_mod1, ~ Site + Plot)
-prop_mod3 <- update(prop_mod1, ~ Site + Plot + (1 + Site|RE))
-prop_mod4 <- update(prop_mod1, ~ Site + Plot + (1 + Plot|RE))
-prop_mod5 <- update(prop_mod1, ~ Site + Plot + (0 + Site|RE))
-prop_mod6 <- update(prop_mod1, ~ Site + Plot + (0 + Plot|RE))
-#no RS models converged
 
 model.sel(list(prop_mod1, prop_mod2))
 #RE does not improve fit
@@ -673,6 +681,7 @@ herb_plot <- june18_dat %>%
          title = "Herbivory by Climate Site and Grazing Treatment", 
          fill = "Grazing Treatment") +
     scale_fill_brewer(palette = "Dark2")
+herb_plot
 #weird interaction between plot WC and site Mesic, see model table as well
 
 #total herbivory by site only
@@ -724,11 +733,6 @@ herb_mod1 <- glmmTMB(herb_YN ~ Plot + Site + (1|RE), data = june18_dat, family =
 
 #test random effects
 herb_mod2 <- update(herb_mod1, ~ Site + Plot)
-herb_mod3 <- update(herb_mod1, ~ Site + Plot + (1 + Site|RE))
-herb_mod4 <- update(herb_mod1, ~ Site + Plot + (1 + Plot|RE))
-herb_mod5 <- update(herb_mod1, ~ Site + Plot + (0 + Site|RE))
-herb_mod6 <- update(herb_mod1, ~ Site + Plot + (0 + Plot|RE))
-#no random slope models converged
 
 model.sel(list(herb_mod1, herb_mod2))
 #excluding random effects slightly improves fit
@@ -741,7 +745,6 @@ herb_mod <- update(herb_mod1, ~ Site + (1|RE))
 summary(herb_mod)
 #none of the terms are significant, is this support for the null model?
 ```
-
 
 DHARMa Diagnostics:
 ```{r}
@@ -796,21 +799,21 @@ testResiduals(simulationOutput, plot = T)
 tab_model(herb_mod)
 ```
 
-### Comparing herbivory to death
+### Further explorations of Herbivory (work in progress)
 ```{r}
 june18_dat$herb_YN <- as.factor(as.character(june18_dat$herb_YN))
 
 june18_dat %>%
-  dplyr::group_by(herb_YN) %>% 
-  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+  group_by(herb_YN) %>% 
+  summarize(mean = list(mean_se(prop_dead))) %>%
   unnest(mean) %>%
   ggplot(aes(x = herb_YN, y = y)) +
     geom_bar(stat = "identity")
 #herbivory results in much higher death rate
 
 june18_dat %>%
-  dplyr::group_by(Site, herb_YN) %>% 
-  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+  group_by(Site, herb_YN) %>% 
+  summarize(mean = list(mean_se(prop_dead))) %>%
   unnest(mean) %>%
   ggplot(aes(x = herb_YN, y = y, fill = Site)) +
     geom_bar(stat = "identity", position = "dodge")
@@ -822,26 +825,108 @@ june18_dat %>%
   unnest(mean) %>%
   ggplot(aes(x = herb_YN, y = y, fill = Plot)) +
     geom_bar(stat = "identity", position = "dodge")
-#herbivory increases death rate 4x in O and W, but only 2x in WC - herbivory by cattle not as destructive as herbivory by wildlife? Or presence of cattle somehow decreases herbivory intensity?
+```
+* Herbivory increases death rate in O and W, but decreases in WC - herbivory by cattle not as destructive as herbivory by wildlife? Or presence of cattle somehow decreases herbivory intensity? 
+* Could be connected to what type of herbivory is occurring - as per next graph, below-ground herbivory drives death, so maybe WC plots have more above-ground herbivory and plots with no cattle have more below-ground?
+* Also need to keep in mind that Plot is not a significant variable in the proportion dead model
 
+Effects of different herbivory types on survival
+```{r}
 june18_dat %>% 
-  gather(herb_type, herb, above_YN:below_YN) %>% 
-  dplyr::group_by(herb_type, herb) %>% 
-  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+  gather(herb_type, herb, above_YN:herb_YN) %>% 
+  group_by(herb_type, herb) %>% 
+  summarize(mean = list(mean_se(prop_dead))) %>%
   unnest(mean) %>% 
   ggplot(aes(x = herb_type, y = herb, fill = y)) +
     geom_tile()
 #complex interaction - aboveground herbivory decreases death rate, belowground herbiory increases it
+#this graph is a bit confusing - 1 and 0 on the y-axis represent whether or not the type of herbivory on the x-axis occurred, and the lighter the color, the higher proportion dead
 ```
 
-### Adding herbivory to proportion dead model
+Adding herbivory occurrence to proportion dead model
 ```{r}
-dead_mod7 <- glmmTMB(prop_dead ~ Plot*Site + herb_YN + (1|Block/Transect), data = june18_dat, family = "binomial")
+prop_mod_herb <- update(prop_mod, ~ Site + herb_YN + (1|RE))
 
-model.sel(list(dead_mod, dead_mod7))
-#adding herbivory improves fit
+model.sel(list(prop_mod, prop_mod_herb))
+#adding herbivory occurence does not improve fit
+```
 
-dead_mod8 <- glmmTMB(prop_dead ~ herb_YN + (1|Block/Transect), data = june18_dat, family = "binomial")
+Investigating frequency of herbivory types
+```{r}
+ggplot(june18_dat, aes(x=above_prop)) +
+  geom_histogram()
 
-model.sel(list(dead_mod, dead_mod8))
+#proportion of seedlings with above-ground herbivory:
+june18_dat %>% 
+  group_by(Plot, Site) %>% 
+  summarize(mean = list(mean_se(above_prop))) %>% 
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = Plot)) +
+  bar_plot +
+  error_bars
+#pretty interesting, addition of cattle clearly increases above-ground herbivory
+
+#proportion of seedlings with below-ground herbivory:
+june18_dat %>% 
+  group_by(Plot, Site) %>% 
+  summarize(mean = list(mean_se(below_prop))) %>% 
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = Plot)) +
+  bar_plot +
+  error_bars
+#below-ground herbivory basically only happens in Arid
+```
+
+Adding above-ground herbivory frequency to proportion dead model
+```{r}
+prop_mod_above <- update(prop_mod, ~ Site + above_prop + (1|RE))
+#did this work? not sure why cnd(abv_prp) is a numeric value and not just a "+" like it usually is
+model.sel(list(prop_mod, prop_mod_above))
+```
+
+### Modelling Above-Ground Herbivory
+
+```{r}
+above_mod1 <- glmmTMB(above_prop ~ Plot + Site + (1|RE), ziformula = ~ 1, family = beta_family(link = "probit"), data = june18_dat)
+#doesn't converge with interaction
+
+zi_list <- list(ziformula = alist(
+    zi1 = ~ 1,
+    zisite = ~ (1|Site),
+    ziplot = ~ (1|Plot),
+    ziRE = ~ (1|RE)
+    ))
+
+dredge(above_mod1, varying = zi_list, subset = ("cond(Site)" & "cond(Plot)"))
+#zi = ~ 1 is best
+
+dredge(above_mod1)
+#Plot-only model is best
+```
+
+```{r}
+above_mod <- glmmTMB(above_prop ~ Plot + (1|RE), ziformula = ~ 1, family = beta_family(link="cloglog"), data = june18_dat)
+summary(above_mod)
+```
+
+DHARMa Diagnostics:
+```{r}
+above_sim <- simulateResiduals(fittedModel = above_mod, plot = F, n = 1000)
+hist(above_sim)
+testResiduals(above_sim, plot = T)
+#uniformity, dispersion, and outlier tests all non-significant
+#dispersion isn't great, cloglog looks to be better than logit or probit
+```
+
+Testing Effects
+```{r}
+plot(allEffects(above_mod))
+#not sure why this doesn't work, might be becasue of ZI?
+
+pairs(emmeans(above_mod, "Plot"))
+# O-WC and W-WC are significantly different
+#note: contrasts are still on the cloglog scale
+
+ggplot(june18_dat, aes(x = Plot, y = above_prop)) +
+  geom_boxplot() + theme_bw()
 ```

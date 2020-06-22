@@ -1,14 +1,12 @@
 ---
 title: "Seedling Analysis"
 author: "John Parsons"
-date: "5/17/2020"
+date: "6/22/2020"
 output:
   html_document: default
-  pdf_document: default
-  word_document: default
 ---
 
-# Load Required Packages
+### Load Required Packages
 ```{r setup, include=FALSE}
 #install.packages("emmeans") 
 library(tidyverse) #ggplot
@@ -34,7 +32,7 @@ library(effects)
 library(emmeans)
 ```
 
-# Data Tidying/Transformations
+### Data Tidying/Transformations
 ```{r include=FALSE}
 #read in data
 june18_dat <- read.csv("data_raw/SeedlingTransectDataRawSummer18.csv", header = TRUE, na.strings = "")
@@ -81,10 +79,10 @@ june18_dat <- june18_dat %>%
   dplyr::group_by(Year, Month, Site, Block, Plot) %>% 
   summarise(seedlings = sum(seedlings), after_1st_yr = sum(after_1st_yr), old_seedlings = sum(old_seedlings), dead = sum(dead), clump = sum(clump), alive_dess = sum(alive_dess), dead_dess = sum(dead_dess), herb_above = sum(herb_above), herb_below = sum(herb_below))
 
-#add Random Effect ID for block within site
-june18_dat <- june18_dat %>% 
-  mutate(RE = paste(Site, Block, sep = "_"))
-june18_dat$RE <- as.factor(june18_dat$RE)
+#add Random Effect ID for block within site (replaced with Site/Block)
+#june18_dat <- june18_dat %>% 
+  #mutate(RE = paste(Site, Block, sep = "_"))
+#june18_dat$RE <- as.factor(june18_dat$RE)
 
 #new column for clump presence/absence
 june18_dat <- june18_dat %>% 
@@ -217,10 +215,10 @@ Optimal Random Effects Structure:
 ```{r}
 #no zeroes in summed count data (see above)
 #start with truncated poisson distribution and beyond optimal model:
-total_mod1 <- glmmTMB(total ~ Site*Plot + (1|RE), data = june18_dat, family = truncated_poisson)
+total_mod1 <- glmmTMB(total ~ Site*Plot + (1|Site/Block), data = june18_dat, family = truncated_poisson)
 
 #test random effects:
-total_mod2 <- update(total_mod1, ~ Plot*Site) #no RE
+total_mod2 <- update(total_mod1, ~ Plot*Site) #no Site/Block
 
 model.sel(list(total_mod1, total_mod2))
 #random effect improves fit
@@ -395,15 +393,15 @@ june18_dat %>%
 ### Modeling Living Seedling Abundance
 ```{r}
 #starting with ZI nbinom2:
-alive_mod1 <- glmmTMB(alive ~ Site*Plot + (1|RE), 
+alive_mod1 <- glmmTMB(alive ~ Site*Plot + (1|Site/Block), 
                       data = june18_dat, family = nbinom2(), ziformula = ~ 1)
 
 #test random effects:
-alive_mod2 <- update(alive_mod1, ~ Plot*Site) #no RE
-alive_mod3 <- update(alive_mod1, ~ Plot*Site + (1 + Plot|RE)) #random slope of Plot
-alive_mod4 <- update(alive_mod1, ~ Plot*Site + (1 + Site|RE)) #random slope of Site
-alive_mod5 <- update(alive_mod1, ~ Plot*Site + (0 + Plot|RE)) #random slope of Plot, no variation in intercept
-alive_mod6 <- update(alive_mod1, ~ Plot*Site + (0 + Site|RE)) #random slope of Site, no variation in intercept
+alive_mod2 <- update(alive_mod1, ~ Plot*Site) #no Site/Block
+alive_mod3 <- update(alive_mod1, ~ Plot*Site + (1 + Plot|Site/Block)) #random slope of Plot
+alive_mod4 <- update(alive_mod1, ~ Plot*Site + (1 + Site|Site/Block)) #random slope of Site
+alive_mod5 <- update(alive_mod1, ~ Plot*Site + (0 + Plot|Site/Block)) #random slope of Plot, no variation in intercept
+alive_mod6 <- update(alive_mod1, ~ Plot*Site + (0 + Site|Site/Block)) #random slope of Site, no variation in intercept
 
 model.sel(list(alive_mod1, alive_mod2))
 #random effects don't improve fit
@@ -415,8 +413,7 @@ zi_list <- list(ziformula = alist(
     zi0 = ~ 0,
     zi1 = ~ 1,
     zisite = ~ (1|Site),
-    ziplot = ~ (1|Plot),
-    ziRE = ~ (1|RE)
+    ziplot = ~ (1|Plot)
     ))
  
 dredge(alive_mod1, varying = zi_list, subset = ("cond(Site)" & "cond(Plot)"))
@@ -426,7 +423,7 @@ dredge(alive_mod1, varying = zi_list, subset = ("cond(Site)" & "cond(Plot)"))
 dredge(update(alive_mod1, ziformula = ~ 1))
 #Plot-only model is best
 
-alive_mod <- glmmTMB(alive ~ Plot + (1|RE), ziformula = ~ 1, data = june18_dat, family = nbinom2())
+alive_mod <- glmmTMB(alive ~ Plot + (1|Site/Block), ziformula = ~ 1, data = june18_dat, family = nbinom2())
 summary(alive_mod)
 ```
 
@@ -508,7 +505,9 @@ june18_clump_plot
 ggsave("plots/june18_clump_plot.png", width = 10)
 ```
 
-### Exploratory Visualizations, seedling death
+## Seedling death
+
+### Exploratory Visualizations
 
 ```{r echo=FALSE}
 ggplot(june18_dat, aes(x = alive/total)) + 
@@ -568,13 +567,14 @@ june18_dat %>%
 june18_dat <- june18_dat %>% mutate(no_ones = ifelse(prop_dead == 1, 0.999, prop_dead))
 
 #start with binomial distribution (two approaches, cbind vs weight by total)
-prop_mod0 <- glmmTMB((alive/total) ~ Site * Plot + (1|RE), ziformula = ~ 0, data = june18_dat, family = binomial(), weights = (total))
-prop_mod1 <- glmmTMB(cbind(alive, dead) ~ Site * Plot + (1|RE), ziformula = ~ 0, data = june18_dat, family = binomial())
+prop_mod0 <- glmmTMB((alive/total) ~ Site * Plot + (1|Site/Block), ziformula = ~ 0, data = june18_dat, family = binomial(), weights = (total))
+
+prop_mod1 <- glmmTMB(cbind(alive, dead) ~ Site * Plot + (1|Site/Block), ziformula = ~ 0, data = june18_dat, family = binomial())
 
 prop_mod2 <- update(prop_mod1, ~ Site * Plot)
 
 model.sel(list(prop_mod1, prop_mod0))
-#RE does improve fit
+#Site/Block does improve fit
 ```
 
 Optimal Fixed Effects Structure
@@ -586,18 +586,18 @@ dredge(prop_mod0)
 *dredge doesn't work with either model
 
 ```{r}
-prop_mod01 <- update(prop_mod0, ~ Site + Plot + (1|RE))
-prop_mod02 <- update(prop_mod0, ~ Plot + (1|RE))
-prop_mod03 <- update(prop_mod0, ~ Site + (1|RE))
-prop_mod04 <- update(prop_mod0, ~ (1|RE))
+prop_mod01 <- update(prop_mod0, ~ Site + Plot + (1|Site/Block))
+prop_mod02 <- update(prop_mod0, ~ Plot + (1|Site/Block))
+prop_mod03 <- update(prop_mod0, ~ Site + (1|Site/Block))
+prop_mod04 <- update(prop_mod0, ~ (1|Site/Block))
                      
 model.sel(list(prop_mod0, prop_mod01, prop_mod02, prop_mod03, prop_mod04))
 #full model is best
 
-prop_mod2 <- update(prop_mod1, ~ Site + Plot + (1|RE))
-prop_mod3 <- update(prop_mod1, ~ Plot + (1|RE))
-prop_mod4 <- update(prop_mod1, ~ Site + (1|RE))
-prop_mod5 <- update(prop_mod1, ~(1|RE))
+prop_mod2 <- update(prop_mod1, ~ Site + Plot + (1|Site/Block))
+prop_mod3 <- update(prop_mod1, ~ Plot + (1|Site/Block))
+prop_mod4 <- update(prop_mod1, ~ Site + (1|Site/Block))
+prop_mod5 <- update(prop_mod1, ~(1|Site/Block))
 
 model.sel(list(prop_mod1, prop_mod2, prop_mod3, prop_mod4))
 #full model is best
@@ -609,7 +609,7 @@ zi_list <- list(ziformula = alist(
     zi1 = ~ 1,
     zisite = ~ (1|Site),
     ziplot = ~ (1|Plot),
-    ziRE = ~ (1|RE)
+    ziSite/Block = ~ (1|Site/Block)
     ))
 
 dredge(prop_mod1, varying = zi_list, subset = ("cond(Site)" & "cond(Plot)"))
@@ -634,10 +634,9 @@ testResiduals(prop_dead_sim1, plot = T)
 
 Testing Effects
 ```{r}
-plot(allEffects(prop_mod1))
-
 ggplot(june18_dat, aes(x = Site, y = (alive/total), fill = Plot)) +
-  geom_boxplot() + theme_bw()
+  geom_boxplot() + 
+  theme_bw()
 #more variation between sites than plots, so group by site and then get pairwise contrasts between plots?
 
 pairs(emmeans(prop_mod1, "Plot", "Site"))
@@ -647,7 +646,9 @@ pairs(emmeans(prop_mod1, "Site"))
 # Arid-Interm are significantly different when plots are averaged, idk how arid-mesic isn't significant as well?
 ```
 
-### Exploratory Visualizations, Herbivory Occurence
+## Herbivory Occurence
+
+### Exploratory Visualizations
 ```{r include=FALSE}
 june18_dat$herb_YN <- as.numeric(as.character(june18_dat$herb_YN))
 
@@ -738,7 +739,7 @@ june18_dat %>%
 ### Modeling Herbivory Occurrence
 ```{r}
 #start with binomial, complimentary log-log due to asymmetric distribution:
-herb_mod1 <- glmmTMB(herb_YN ~ Plot + Site + (1|RE), data = june18_dat, family = binomial(link = "cloglog"))
+herb_mod1 <- glmmTMB(herb_YN ~ Plot + Site + (1|Site/Block), data = june18_dat, family = binomial(link = "cloglog"))
 #doesn't converge when interaction included
 
 #test random effects
@@ -753,7 +754,7 @@ dredge(herb_mod1)
 summary(herb_mod1)
 #none of the terms are significant, further support for the null model
 
-herb_mod <- update(herb_mod1, ~ (1|RE))
+herb_mod <- update(herb_mod1, ~ (1|Site/Block))
 summary(herb_mod)
 ```
 
@@ -847,7 +848,7 @@ june18_dat %>%
 
 Adding herbivory occurrence to proportion dead model
 ```{r echo=FALSE}
-prop_mod_herb <- update(prop_mod0, ~ Site + herb_YN + (1|RE))
+prop_mod_herb <- update(prop_mod0, ~ Site + herb_YN + (1|Site/Block))
 
 model.sel(list(prop_mod0, prop_mod_herb))
 ```
@@ -883,7 +884,7 @@ below_plot <- june18_dat %>%
   unnest(mean) %>% 
   ggplot(aes(x = Site, y = y, fill = Plot)) +
   bar_plot +
-  error_bars +
+  error_bars
   
 below_plot
 ggsave("plots/below_plot.png", width = 10, height = 7)
@@ -894,7 +895,7 @@ ggsave("plots/below_plot.png", width = 10, height = 7)
 
 Adding above-ground herbivory frequency to proportion dead model
 ```{r}
-prop_mod_above <- update(prop_mod0, ~ Site + above_prop + (1|RE))
+prop_mod_above <- update(prop_mod0, ~ Site + above_prop + (1|Site/Block))
 #did this work? not sure why cnd(abv_prp) is a numeric value and not just a "+" like it usually is
 model.sel(list(prop_mod0, prop_mod_above))
 ```
@@ -902,14 +903,13 @@ model.sel(list(prop_mod0, prop_mod_above))
 ### Modelling Above-Ground Herbivory
 
 ```{r echo=TRUE}
-above_mod1 <- glmmTMB(above_prop ~ Plot + Site + (1|RE), ziformula = ~ 1, family = beta_family(link = "probit"), data = june18_dat)
+above_mod1 <- glmmTMB(above_prop ~ Plot + Site + (1|Site/Block), ziformula = ~ 1, family = beta_family(link = "probit"), data = june18_dat)
 #doesn't converge with interaction
 
 zi_list <- list(ziformula = alist(
     zi1 = ~ 1,
     zisite = ~ (1|Site),
-    ziplot = ~ (1|Plot),
-    ziRE = ~ (1|RE)
+    ziplot = ~ (1|Plot)
     ))
 
 dredge(above_mod1, varying = zi_list, subset = ("cond(Site)" & "cond(Plot)"))
@@ -920,7 +920,7 @@ dredge(above_mod1)
 ```
 
 ```{r echo=TRUE}
-above_mod <- glmmTMB(above_prop ~ Plot + (1|RE), ziformula = ~ 1, family = beta_family(link="cloglog"), data = june18_dat)
+above_mod <- glmmTMB(above_prop ~ Plot + (1|Site/Block), ziformula = ~ 1, family = beta_family(link="cloglog"), data = june18_dat)
 summary(above_mod)
 ```
 
@@ -950,7 +950,8 @@ ggplot(june18_dat, aes(x = Plot, y = above_prop)) +
   geom_boxplot() + theme_bw()
 ```
 
-### Desiccation
+## Desiccation
+
 ```{r}
 ggplot(june18_dat, aes(x = dess_YN)) +
   geom_histogram(binwidth = 1)

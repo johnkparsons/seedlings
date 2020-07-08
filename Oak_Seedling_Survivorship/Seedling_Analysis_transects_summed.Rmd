@@ -4,11 +4,12 @@ author: "John Parsons"
 date: "6/22/2020"
 output:
   html_document: default
+  pdf_document: default
 ---
 
 ### Load Required Packages
 ```{r setup, include=FALSE}
-#install.packages("emmeans") 
+#install.packages("installr") 
 library(tidyverse) #ggplot
 library(dplyr) #data transformation
 group_by <- dplyr::group_by
@@ -27,9 +28,11 @@ library(glmmTMB) #GLMMs
 library(sjPlot) #model output table
 library(DHARMa) #model diagnostics
 library(glmmADMB) #alternate package for GLMM - interested in using MCMC
-library(broom)
 library(effects)
-library(emmeans)
+library(emmeans) #effects testing
+library(installr)
+library(sjstats)
+#install.pandoc()
 ```
 
 ### Data Tidying/Transformations
@@ -37,7 +40,7 @@ library(emmeans)
 #read in data
 june18_dat <- read.csv("data_raw/SeedlingTransectDataRawSummer18.csv", header = TRUE, na.strings = "")
 str(june18_dat)
-View(june18_dat)
+#View(june18_dat)
 
 #remove blank rows and columns
 june18_dat <- june18_dat %>% 
@@ -80,9 +83,9 @@ june18_dat <- june18_dat %>%
   summarise(seedlings = sum(seedlings), after_1st_yr = sum(after_1st_yr), old_seedlings = sum(old_seedlings), dead = sum(dead), clump = sum(clump), alive_dess = sum(alive_dess), dead_dess = sum(dead_dess), herb_above = sum(herb_above), herb_below = sum(herb_below))
 
 #add Random Effect ID for block within site (replaced with Site/Block)
-#june18_dat <- june18_dat %>% 
-  #mutate(RE = paste(Site, Block, sep = "_"))
-#june18_dat$RE <- as.factor(june18_dat$RE)
+june18_dat <- june18_dat %>% 
+  mutate(RE = paste(Site, Block, sep = "_"))
+june18_dat$RE <- as.factor(june18_dat$RE)
 
 #new column for clump presence/absence
 june18_dat <- june18_dat %>% 
@@ -151,7 +154,8 @@ june18_plot <- june18_dat %>%
     labs(x = "Climate Site", 
          y = "Average Number of Seedlings per Plot", 
          title = "Number of Seedlings by Climate Site and Grazing Treatment", 
-         fill = "Grazing Treatment")
+         fill = "Grazing Treatment") +
+    scale_fill_brewer(palette = "Dark2")
 june18_plot
 ggsave("plots/june18_plot.png", width = 10, height = 7)
 ```
@@ -208,31 +212,22 @@ june18_dat %>%
 
 * no big differences here
 
-
 ### Modelling Total Seedling Abundance
 
-Optimal Random Effects Structure:
-```{r}
+Optimal Fixed Effects Structure:
+```{r echo=FALSE}
 #no zeroes in summed count data (see above)
-#start with truncated poisson distribution and beyond optimal model:
+#start with truncated poisson distribution and full model:
 total_mod1 <- glmmTMB(total ~ Site*Plot + (1|Site/Block), data = june18_dat, family = truncated_poisson)
 
-#test random effects:
-total_mod2 <- update(total_mod1, ~ Plot*Site) #no Site/Block
-
-model.sel(list(total_mod1, total_mod2))
-#random effect improves fit
-```
-
-Optimal fixed effects structure:
-```{r}
 dredge(total_mod1)
 #full model is best
+
 total_mod <- total_mod1
 ```
 
 DHARMa Diagnostics:
-```{r}
+```{r echo=FALSE}
 total_sim <- simulateResiduals(fittedModel = total_mod, plot = F, n = 1000)
 hist(total_sim)
 testResiduals(total_sim, plot = T)
@@ -240,8 +235,7 @@ testResiduals(total_sim, plot = T)
 
 *uniformity, dispersion, and outlier tests all non-significant
 
-
-Test other distributions (if necessary?)
+Test other distributions (not necessary?)
 ```{r echo=FALSE}
 fam_list <- list(family = alist(
     truncpois = truncated_poisson,
@@ -270,9 +264,9 @@ Testing Effects
 plot(allEffects(total_mod))
 
 emmeans(total_mod, pairwise ~ Site)
-#site contrasts are all non-significant
+#all non-sig
 emmeans(total_mod, pairwise ~ Plot)
-#plot contrasts are all significant
+#all significant
 
 emmip(total_mod, Plot ~ Site)
 #subsetting by Plot:
@@ -282,11 +276,14 @@ emmeans(total_mod, pairwise ~ Site | Plot)
 emmip(total_mod, Site ~ Plot)
 #subsetting by Site:
 emmeans(total_mod, pairwise ~ Plot | Site)
+#all Plot contrasts significant
+
+#r.squaredGLMM(total_mod)
+#performance::r2(total_mod)
+#performance::icc(total_mod)
 ```
 
-* all Plot contrasts significant
-* report this?
-* probably more I can do to investigate interaction
+* Climate, grazing treatment, and their interaction were all included as fixed effects in the model of best fit. Arid, intermediate, and mesic plots had an average of 80, 111, and 120 seedlings. There were no significant differences in seedling abundance between climates, either within each grazing treatment or when averaged across the three treatments. Across climates, exclosure plots had an average of 162 seedlings, more than both wildlife plots (93, p < 0.0001) and wildlife/cattle plots (46, p < 0.0001). Contrasts were also significant for all treatment pairs within climate sites (Table 1).
 
 probably won't keep this chunk:
 ```{r eval=FALSE, include=FALSE}
@@ -343,7 +340,8 @@ june18_alive_plot <- june18_dat %>%
     labs(x = "Climate Site", 
          y = "Average Number of Living Seedlings per Plot", 
          title = "Number of Living Seedlings by Climate Site and Grazing Treatment", 
-         fill = "Grazing Treatment")
+         fill = "Grazing Treatment") +
+    scale_fill_brewer(palette = "Dark2")
 june18_alive_plot
 ggsave("plots/june18_alive_plot.png", width = 10)
 ```
@@ -392,39 +390,22 @@ june18_dat %>%
 
 ### Modeling Living Seedling Abundance
 ```{r}
-#starting with ZI nbinom2:
+#starting with poisson:
 alive_mod1 <- glmmTMB(alive ~ Site*Plot + (1|Site/Block), 
-                      data = june18_dat, family = nbinom2(), ziformula = ~ 1)
-
-#test random effects:
-alive_mod2 <- update(alive_mod1, ~ Plot*Site) #no Site/Block
-alive_mod3 <- update(alive_mod1, ~ Plot*Site + (1 + Plot|Site/Block)) #random slope of Plot
-alive_mod4 <- update(alive_mod1, ~ Plot*Site + (1 + Site|Site/Block)) #random slope of Site
-alive_mod5 <- update(alive_mod1, ~ Plot*Site + (0 + Plot|Site/Block)) #random slope of Plot, no variation in intercept
-alive_mod6 <- update(alive_mod1, ~ Plot*Site + (0 + Site|Site/Block)) #random slope of Site, no variation in intercept
-
-model.sel(list(alive_mod1, alive_mod2))
-#random effects don't improve fit
+                      data = june18_dat, family = poisson(), ziformula = ~ 0)
 ```
 
-Optimal ZI formula and Fixed Effects
+Optimal Fixed Effects and ZI Formula
 ```{r}
-zi_list <- list(ziformula = alist(
-    zi0 = ~ 0,
-    zi1 = ~ 1,
-    zisite = ~ (1|Site),
-    ziplot = ~ (1|Plot)
-    ))
- 
-dredge(alive_mod1, varying = zi_list, subset = ("cond(Site)" & "cond(Plot)"))
-#not sure how to fix interaction
-#zi = 1 is best
+dredge(alive_mod1)
+#Full model is best
 
-dredge(update(alive_mod1, ziformula = ~ 1))
-#Plot-only model is best
+alive_mod2 <- update(alive_mod1, ziformula = ~ 1)
 
-alive_mod <- glmmTMB(alive ~ Plot + (1|Site/Block), ziformula = ~ 1, data = june18_dat, family = nbinom2())
-summary(alive_mod)
+model.sel(alive_mod1, alive_mod2)
+#ZI ~ 1 is better than no ZI
+
+alive_mod <- alive_mod2
 ```
 
 DHARMa Diagnostics:
@@ -442,20 +423,60 @@ plot(allEffects(alive_mod))
 
 pairs(emmeans(alive_mod, "Plot"))
 
-ggplot(june18_dat, aes(x = Plot, y = alive)) +
-  geom_boxplot() + theme_bw()
+pairs(emmeans(alive_mod, ~ Plot | Site))
+
+pairs(emmeans(alive_mod, "Site"))
+
+pairs(emmeans(alive_mod, ~ Site | Plot))
+
+#r.squaredGLMM(alive_mod)
+#performance::r2(alive_mod)
+#performance::icc(alive_mod)
+```
+
+Testing nbinom2
+```{r}
+alive_mod_nb <- update(alive_mod, family = nbinom2())
+model.sel(list(alive_mod, alive_mod_nb))
+```
+* nbinom2 fits way better...
+
+Optimal Fixed Effects and ZI Formula, nbinom2
+```{r}
+dredge(alive_mod_nb)
+#Plot-only model is best
+
+alive_mod_nb <- update(alive_mod_nb, ~ Plot + (1|Site/Block))
+
+alive_mod_nb0 <- update(alive_mod_nb, ziformula = ~ 0)
+
+model.sel(alive_mod_nb, alive_mod_nb0)
+#ZI is better
+```
+
+DHARMa Diagnostics:
+```{r}
+alive_sim_nb <- simulateResiduals(fittedModel = alive_mod_nb, plot = F, n = 1000)
+hist(alive_sim_nb)
+testResiduals(alive_sim_nb, plot = T)
+```
+* looks fine
+
+Testing Effects
+```{r echo=FALSE}
+plot(allEffects(alive_mod_nb))
+
+pairs(emmeans(alive_mod_nb, "Plot"))
+
+#r.squaredGLMM(alive_mod)
+#doesn't work with ZI
+
+r.squaredGLMM(update(alive_mod_nb, ziformula = ~ 0))
 ```
 
 * O-WC and W-WC are significant
-* more alive seedlings in W, despite less total seedlings than O
 
-Testing nbinom1
-```{r}
-alive_mod_nb1 <- update(alive_mod1, family = nbinom1())
-model.sel(list(alive_mod1, alive_mod_nb1))
-```
-
-* worse fit
+* The best-fit model of living seedlings included grazing treatment, but not climate site. Wildlife/cattle plots had 35 living seedlings on average, less than exclosure plots (135, p < 0.005) and wildlife plots (67, p < 0.05). Exclosure and wildlife plots did not differ significantly (p = 0.3970).
 
 old method
 ```{r eval=FALSE, include=FALSE}
@@ -505,7 +526,7 @@ june18_clump_plot
 ggsave("plots/june18_clump_plot.png", width = 10)
 ```
 
-## Seedling death
+## Seedling Mortality
 
 ### Exploratory Visualizations
 
@@ -518,21 +539,24 @@ ggplot(june18_dat, aes(x = alive/total)) +
 
 Proportion dead by plot and site
 ```{r echo=FALSE}
-june18_dat %>% 
-  dplyr::group_by(Site, Plot) %>% 
-  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
-  unnest(mean) %>% 
-  ggplot(aes(x = Site, y = y, fill = Plot)) +
-    bar_plot +
-    error_bars +
-    labs(x = "Climate Site", 
-         y = "Proportion of Seedlings Dead", 
-         title = "Seedling Death by Climate Site and Grazing Treatment", 
-         fill = "Grazing Treatment") +
-    scale_fill_brewer(palette = "Dark2")
+prop_plot <- june18_dat %>% 
+              dplyr::group_by(Site, Plot) %>% 
+              dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+              unnest(mean) %>% 
+              ggplot(aes(x = Site, y = y, fill = Plot)) +
+                bar_plot +
+                error_bars +
+                labs(x = "Climate Site", 
+                     y = "Proportion of Seedlings Dead", 
+                     title = "Seedling Mortality by Climate Site and Grazing Treatment", 
+                     fill = "Grazing Treatment") +
+                scale_fill_brewer(palette = "Dark2")
 ggsave("plots/prop_plot.png", width = 10, height = 7)
 ```
 
+```{r}
+prop_plot
+```
 * arid has way higher proportion of dead seedlings than other climate sites
 
 Proportion dead by site only
@@ -563,18 +587,13 @@ june18_dat %>%
 
 ### Modelling Proportion Dead
 
-```{r}
+```{r  echo=FALSE}
 june18_dat <- june18_dat %>% mutate(no_ones = ifelse(prop_dead == 1, 0.999, prop_dead))
 
 #start with binomial distribution (two approaches, cbind vs weight by total)
-prop_mod0 <- glmmTMB((alive/total) ~ Site * Plot + (1|Site/Block), ziformula = ~ 0, data = june18_dat, family = binomial(), weights = (total))
+prop_mod0 <- glmmTMB((alive/total) ~ Site + Plot + (1|Site/Block), ziformula = ~ 0, data = june18_dat, family = binomial(), weights = (total))
 
-prop_mod1 <- glmmTMB(cbind(alive, dead) ~ Site * Plot + (1|Site/Block), ziformula = ~ 0, data = june18_dat, family = binomial())
-
-prop_mod2 <- update(prop_mod1, ~ Site * Plot)
-
-model.sel(list(prop_mod1, prop_mod0))
-#Site/Block does improve fit
+prop_mod1 <- glmmTMB(cbind(alive, dead) ~ Site + Plot + (1|Site/Block), ziformula = ~ 0, data = june18_dat, family = binomial())
 ```
 
 Optimal Fixed Effects Structure
@@ -604,27 +623,22 @@ model.sel(list(prop_mod1, prop_mod2, prop_mod3, prop_mod4))
 ```
 
 Optimal ZI Formula?
-```{r eval=FALSE, include=FALSE}
-zi_list <- list(ziformula = alist(
-    zi1 = ~ 1,
-    zisite = ~ (1|Site),
-    ziplot = ~ (1|Plot),
-    ziSite/Block = ~ (1|Site/Block)
-    ))
+```{r}
+prop_mod_ZI <- update(prop_mod1, ziformula = ~1)
 
-dredge(prop_mod1, varying = zi_list, subset = ("cond(Site)" & "cond(Plot)"))
+model.sel(list(prop_mod1, prop_mod_ZI))
 ```
 
 * zi = (1|Site) is best, but I'll stick with ~1 for now (code isn't knitting either)
 
 DHARMa Diagnostics:
-```{r}
+```{r  echo=FALSE}
 prop_dead_sim0 <- simulateResiduals(fittedModel = prop_mod0, plot = F, n = 1000)
 hist(prop_dead_sim0)
 testResiduals(prop_dead_sim0, plot = T)
 #uniformity, dispersion, and outlier tests all non-significant
 
-prop_dead_sim1 <- simulateResiduals(fittedModel = prop_mod1, plot = F, n = 1000)
+prop_dead_sim1 <- simulateResiduals(fittedModel = prop_mod_ZI, plot = F, n = 1000)
 hist(prop_dead_sim1)
 testResiduals(prop_dead_sim1, plot = T)
 #uniformity, dispersion, and outlier tests all non-significant
@@ -633,18 +647,22 @@ testResiduals(prop_dead_sim1, plot = T)
 * Model 1, with cbind(alive, dead), looks a bit better on the QQ plot
 
 Testing Effects
-```{r}
+```{r echo=FALSE}
 ggplot(june18_dat, aes(x = Site, y = (alive/total), fill = Plot)) +
   geom_boxplot() + 
   theme_bw()
 #more variation between sites than plots, so group by site and then get pairwise contrasts between plots?
 
-pairs(emmeans(prop_mod1, "Plot", "Site"))
-# Arid O-W and O-WC are only significant pairs
+pairs(emmeans(prop_mod_ZI, "Plot"))
+# O-W and O-WC are significant
 
-pairs(emmeans(prop_mod1, "Site"))
-# Arid-Interm are significantly different when plots are averaged, idk how arid-mesic isn't significant as well?
+pairs(emmeans(prop_mod_ZI, "Site"))
+# all site contrast are significant
+
+#r.squaredGLMM(prop_mod_ZI)
 ```
+
+* The best-fit model for seedling mortality included both climate site and grazing treatment (Table 1). Arid plots had 80.15% mortality, more than both Mesic plots (0.53%, p < 0.0001) and Intermediate plots (10.43%, p < 0.001). Intermediate plots also had significantly higher mortality than Mesic plots (p < 0.05). Across climate sites, exclosure plots (33.46%) and wildlife/cattle plots (29.33%) did not significantly differ in their mortality rates (p = 0.1774). 28.32% of seedlings died in wildlife plots,  more than exclosure plots (p < 0.0005) and less than wildlife/cattle plots (p < 0.05).
 
 ## Herbivory Occurence
 
@@ -737,16 +755,10 @@ june18_dat %>%
 
 
 ### Modeling Herbivory Occurrence
-```{r}
+```{r  echo=FALSE}
 #start with binomial, complimentary log-log due to asymmetric distribution:
 herb_mod1 <- glmmTMB(herb_YN ~ Plot + Site + (1|Site/Block), data = june18_dat, family = binomial(link = "cloglog"))
 #doesn't converge when interaction included
-
-#test random effects
-herb_mod2 <- update(herb_mod1, ~ Site + Plot)
-
-model.sel(list(herb_mod1, herb_mod2))
-#excluding random effects slightly improves fit
 
 #test fixed effects
 dredge(herb_mod1)
@@ -830,7 +842,6 @@ june18_dat %>%
 
 * Herbivory increases death rate in O and W, but decreases in WC - herbivory by cattle not as destructive as herbivory by wildlife? Or presence of cattle somehow decreases herbivory intensity? 
 * Could be connected to what type of herbivory is occurring - as per next graph, below-ground herbivory drives death, so maybe WC plots have more above-ground herbivory and plots with no cattle have more below-ground?
-* Also need to keep in mind that Plot is not a significant variable in the proportion dead model
 
 Effects of different herbivory types on survival
 ```{r echo=FALSE}
@@ -857,6 +868,9 @@ model.sel(list(prop_mod0, prop_mod_herb))
 
 Investigating frequency of herbivory types
 ```{r echo=FALSE}
+ggplot(june18_dat, aes(x=herb_above)) +
+  geom_histogram(binwidth = 1)
+
 ggplot(june18_dat, aes(x=above_prop)) +
   geom_histogram()
 ```
@@ -869,7 +883,8 @@ above_plot <- june18_dat %>%
   unnest(mean) %>% 
   ggplot(aes(x = Site, y = y, fill = Plot)) +
   bar_plot +
-  error_bars
+  error_bars +
+  scale_fill_brewer(palette = "Dark2")
 above_plot
 ggsave("plots/above_plot.png", width = 10, height = 7)
 ```
@@ -894,7 +909,7 @@ ggsave("plots/below_plot.png", width = 10, height = 7)
 
 
 Adding above-ground herbivory frequency to proportion dead model
-```{r}
+```{r echo=FALSE}
 prop_mod_above <- update(prop_mod0, ~ Site + above_prop + (1|Site/Block))
 #did this work? not sure why cnd(abv_prp) is a numeric value and not just a "+" like it usually is
 model.sel(list(prop_mod0, prop_mod_above))
@@ -902,46 +917,54 @@ model.sel(list(prop_mod0, prop_mod_above))
 
 ### Modelling Above-Ground Herbivory
 
+Optimal fixed effects
 ```{r echo=TRUE}
-above_mod1 <- glmmTMB(above_prop ~ Plot + Site + (1|Site/Block), ziformula = ~ 1, family = beta_family(link = "probit"), data = june18_dat)
-#doesn't converge with interaction
+above_mod1 <- glmmTMB((herb_above/total) ~ Plot + Site + (1|Site/Block),
+                      ziformula = ~ 0, family = binomial(),
+                      data = june18_dat, weights = total)
 
-zi_list <- list(ziformula = alist(
-    zi1 = ~ 1,
-    zisite = ~ (1|Site),
-    ziplot = ~ (1|Plot)
-    ))
+above_mod2 <- update(above_mod1, ~ Site + (1|Site/Block))
+above_mod3 <- update(above_mod1, ~ Plot + (1|Site/Block))
+above_mod4 <- update(above_mod1, ~ (1|Site/Block))
 
-dredge(above_mod1, varying = zi_list, subset = ("cond(Site)" & "cond(Plot)"))
-#zi = ~ 1 is best
-
-dredge(above_mod1)
-#Plot-only model is best
+model.sel(above_mod1, above_mod2, above_mod3, above_mod4)
 ```
+* Plot-only model is best
 
-```{r echo=TRUE}
-above_mod <- glmmTMB(above_prop ~ Plot + (1|Site/Block), ziformula = ~ 1, family = beta_family(link="cloglog"), data = june18_dat)
-summary(above_mod)
+Test ZI
+```{r}
+above_modZI <- update(above_mod3, ziformula = ~ 1)
+
+model.sel(above_mod3, above_modZI)
 ```
+* ZI improves fit
 
 DHARMa Diagnostics:
-```{r echo=FALSE}
-above_sim <- simulateResiduals(fittedModel = above_mod, plot = F, n = 1000)
+```{r}
+above_sim <- simulateResiduals(fittedModel = above_modZI, plot = F, n = 1000)
 hist(above_sim)
 testResiduals(above_sim, plot = T)
 ```
-
 * uniformity, dispersion, and outlier tests all non-significant
-* dispersion isn't great, cloglog looks to be better than logit or probit
 
 Testing Effects
-```{r echo=FALSE}
-#plot(allEffects(above_mod))
-#not sure why this doesn't work, might be becasue of ZI?
+```{r}
+above_mod <- above_modZI
 
 pairs(emmeans(above_mod, "Plot"))
-```
 
+june18_dat %>% 
+  group_by(Plot) %>% 
+  summarize(above_prop = mean(above_prop)) %>% 
+  ggplot(aes(x = Plot, y = above_prop, fill = Plot)) +
+    geom_bar(stat = "identity") +
+    scale_fill_brewer(palette = "Dark2") +
+    theme_bw()
+
+june18_dat %>% 
+  group_by(Plot) %>% 
+  summarize(above_prop = mean(above_prop))
+```
 * O-WC and W-WC are significantly different
 * note: contrasts are still on the cloglog scale
 

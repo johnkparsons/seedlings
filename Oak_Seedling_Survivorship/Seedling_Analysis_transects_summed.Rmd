@@ -4,12 +4,11 @@ author: "John Parsons"
 date: "6/22/2020"
 output:
   html_document: default
-  pdf_document: default
 ---
 
 ### Load Required Packages
-```{r}
-#install.packages("webshot")
+```{r include=FALSE}
+install.packages("plotrix")
 library(tidyverse) #ggplot
 library(dplyr) #data transformation
 group_by <- dplyr::group_by
@@ -36,6 +35,7 @@ library(gt)
 remotes::install_github("rstudio/gt")
 library(webshot)
 webshot::install_phantomjs() #saving gt tables
+library(plotrix)
 ```
 
 ### Data Tidying/Transformations
@@ -127,8 +127,6 @@ june18_dat$herb_YN <- as.factor(june18_dat$herb_YN)
 june18_sum_tidy <- write.csv(june18_dat, "data/june18_sum.csv", row.names = FALSE)
 ```
 
-# Analyses and Visualizations
-
 ## Total Seedling Abundance
 
 ### Exploratory Visualizations
@@ -173,7 +171,7 @@ error_bars <- geom_errorbar(aes(ymax = ymax, ymin = ymin),
 ```
 
 Grouped by grazed Y/N instead of plot:
-```{r echo=FALSE}
+```{r eval=FALSE, include=FALSE}
 june18_dat %>% 
   dplyr::group_by(Site, grazed_YN) %>% 
   dplyr::summarize(mean = list(mean_se(total))) %>%
@@ -188,7 +186,7 @@ june18_dat %>%
 ```
 
 Grouped by plot only:
-```{r echo=FALSE}
+```{r eval=FALSE, include=FALSE}
 june18_dat %>% 
   dplyr::group_by(Plot) %>% 
   dplyr::summarize(mean = list(mean_se(total))) %>%
@@ -202,7 +200,7 @@ june18_dat %>%
 * more herbivores = fewer seedlings
 
 Grouped by site only:
-```{r echo=FALSE}
+```{r eval=FALSE, include=FALSE}
 june18_dat %>% 
   dplyr::group_by(Site) %>% 
   dplyr::summarize(mean = list(mean_se(total))) %>%
@@ -242,7 +240,7 @@ total_table <- dredge(total_mod) %>%
 gtsave(total_table, "plots/total_table.png")
 ```
 
-```{r}
+```{r echo=FALSE}
 total_table
 ```
 
@@ -256,7 +254,7 @@ testResiduals(total_sim, plot = T)
 *uniformity, dispersion, and outlier tests all non-significant
 
 Test other distributions (not necessary?)
-```{r echo=FALSE}
+```{r eval=FALSE, include=FALSE}
 fam_list <- list(family = alist(
     truncpois = truncated_poisson,
     genpois = genpois,
@@ -305,7 +303,6 @@ emmeans(total_mod, pairwise ~ Plot | Site)
 
 * Climate, grazing treatment, and their interaction were all included as fixed effects in the model of best fit. Arid, intermediate, and mesic plots had an average of 80, 111, and 120 seedlings. There were no significant differences in seedling abundance between climates, either within each grazing treatment or when averaged across the three treatments. Across climates, exclosure plots had an average of 162 seedlings, more than both wildlife plots (93, p < 0.0001) and wildlife/cattle plots (46, p < 0.0001). Contrasts were also significant for all treatment pairs within climate sites (Table 1).
 
-probably won't keep this chunk:
 ```{r eval=FALSE, include=FALSE}
 #importance of Plot
 model.sel(list(total_mod5, total_mod6))
@@ -472,48 +469,6 @@ pairs(emmeans(alive_mod, ~ Site | Plot))
 #performance::icc(alive_mod)
 ```
 
-Testing nbinom2
-```{r eval=FALSE, include=FALSE}
-alive_mod_nb <- update(alive_mod, family = nbinom2())
-model.sel(list(alive_mod, alive_mod_nb))
-```
-* nbinom2 fits way better...
-
-Optimal Fixed Effects and ZI Formula, nbinom2
-```{r eval=FALSE, include=FALSE}
-dredge(alive_mod_nb)
-#Plot-only model is best
-
-alive_mod_nb <- update(alive_mod_nb, ~ Plot + (1|Site/Block))
-
-alive_mod_nb0 <- update(alive_mod_nb, ziformula = ~ 0)
-
-model.sel(alive_mod_nb, alive_mod_nb0)
-#ZI is better
-```
-
-DHARMa Diagnostics:
-```{r eval=FALSE, include=FALSE}
-alive_sim_nb <- simulateResiduals(fittedModel = alive_mod_nb, plot = F, n = 1000)
-hist(alive_sim_nb)
-testResiduals(alive_sim_nb, plot = T)
-```
-* looks fine
-
-Testing Effects
-```{r eval=FALSE, include=FALSE}
-plot(allEffects(alive_mod_nb))
-
-pairs(emmeans(alive_mod_nb, "Plot"))
-
-#r.squaredGLMM(alive_mod)
-#doesn't work with ZI
-
-r.squaredGLMM(update(alive_mod_nb, ziformula = ~ 0))
-```
-
-* O-WC and W-WC are significant
-
 * The best-fit model of living seedlings included grazing treatment, but not climate site. Wildlife/cattle plots had 35 living seedlings on average, less than exclosure plots (135, p < 0.005) and wildlife plots (67, p < 0.05). Exclosure and wildlife plots did not differ significantly (p = 0.3970).
 
 old method
@@ -537,32 +492,6 @@ anova(alive_mod3, alive_mod9)
 #p < 0.001
 ```
 
-### Exploratory Visualizations: Clumps
-```{r eval=FALSE, include=FALSE}
-ggplot(june18_dat, aes(x = clump))+
-  geom_histogram(binwidth = 1)
-
-ggplot(june18_dat, aes(x = clump_YN))+
-  geom_histogram(stat = "count")
-```
- 
-Clump presence by site and plot
-```{r eval=FALSE, include=FALSE}
-june18_dat$clump_YN <- as.numeric(june18_dat$clump_YN)
-
-june18_clump_plot <- june18_dat %>% 
-  dplyr::group_by(Site, Plot) %>% 
-  dplyr::summarize(mean = list(mean_se(clump_YN))) %>%
-  unnest(mean) %>% 
-  ggplot(aes(x = Site, y = (y-1), fill = Plot)) +
-    bar_plot +
-    labs(x = "Climate Site", 
-         y = "Proportion of Plots with Clumps", 
-         title = "Presence of Clumps by Climate Site and Grazing Treatment", 
-         fill = "Grazing Treatment")
-june18_clump_plot
-ggsave("plots/june18_clump_plot.png", width = 10)
-```
 
 ## Seedling Mortality
 
@@ -578,8 +507,8 @@ ggplot(june18_dat, aes(x = alive/total)) +
 Proportion dead by plot and site
 ```{r include=FALSE}
 prop_plot <- june18_dat %>% 
-              dplyr::group_by(Site, Plot) %>% 
-              dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+              group_by(Site, Plot) %>% 
+              summarize(mean = list(mean_se(prop_dead))) %>%
               unnest(mean) %>% 
               ggplot(aes(x = Site, y = y, fill = Plot)) +
                 bar_plot +
@@ -600,8 +529,8 @@ prop_plot
 Proportion dead by site only
 ```{r eval=FALSE, include=FALSE}
 june18_dat %>% 
-  dplyr::group_by(Site) %>% 
-  dplyr::summarize(mean = list(mean_se(prop_dead))) %>%
+  group_by(Site) %>% 
+  summarize(mean = list(mean_se(prop_dead))) %>%
   unnest(mean) %>% 
   ggplot(aes(x = Site, y = y)) +
     bar_plot +
@@ -692,16 +621,265 @@ ggplot(june18_dat, aes(x = Site, y = (alive/total), fill = Plot)) +
   theme_bw()
 #more variation between sites than plots, so group by site and then get pairwise contrasts between plots?
 
-pairs(emmeans(prop_mod_ZI, "Plot"))
+pairs(emmeans(prop_mod, "Plot"))
 # O-W and O-WC are significant
 
-pairs(emmeans(prop_mod_ZI, "Site"))
+pairs(emmeans(prop_mod, "Site"))
 # all site contrast are significant
 
 #r.squaredGLMM(prop_mod_ZI)
 ```
 
 * The best-fit model for seedling mortality included both climate site and grazing treatment (Table 1). Arid plots had 80.15% mortality, more than both Mesic plots (0.53%, p < 0.0001) and Intermediate plots (10.43%, p < 0.001). Intermediate plots also had significantly higher mortality than Mesic plots (p < 0.05). Across climate sites, exclosure plots (33.46%) and wildlife/cattle plots (29.33%) did not significantly differ in their mortality rates (p = 0.1774). 28.32% of seedlings died in wildlife plots,  more than exclosure plots (p < 0.0005) and less than wildlife/cattle plots (p < 0.05).
+
+## Herbivory
+
+### Herbivory visualizations
+```{r eval=FALSE, include=FALSE}
+ggplot(june18_dat, aes(x=herb_above)) +
+  geom_histogram(binwidth = 1)
+
+ggplot(june18_dat, aes(x=above_prop)) +
+  geom_histogram()
+```
+
+Proportion of seedlings with above-ground herbivory:
+```{r echo=FALSE}
+above_plot <- june18_dat %>% 
+  group_by(Plot, Site) %>% 
+  summarize(mean = list(mean_se(above_prop))) %>% 
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = Plot)) +
+    bar_plot +
+    error_bars +
+    labs(x = "Climate Site", 
+         y = "Proportion of Seedlings", 
+         title = "Above-Ground Herbivory Occurrence by Climate Site and Grazing Treatment", 
+         fill = "Grazing Treatment") +
+    scale_fill_brewer(palette = "Dark2")
+above_plot
+ggsave("plots/above_plot.png", width = 10, height = 7)
+```
+
+* pretty intuitive, addition of cattle clearly increases above-ground herbivory, especially in mesic
+
+Proportion of seedlings with below-ground herbivory:
+```{r echo=FALSE}
+below_plot <- june18_dat %>% 
+  group_by(Plot, Site) %>% 
+  summarize(mean = list(mean_se(below_prop))) %>% 
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = Plot)) +
+  bar_plot +
+  error_bars
+  
+below_plot
+ggsave("plots/below_plot.png", width = 10, height = 7)
+```
+
+* below-ground herbivory basically only happens in Arid
+
+Adding above-ground herbivory frequency to proportion dead model
+```{r eval=FALSE, include=FALSE}
+prop_mod_above <- update(prop_mod0, ~ Site + above_prop + (1|Site/Block))
+#did this work? not sure why cnd(abv_prp) is a numeric value and not just a "+" like it usually is
+model.sel(list(prop_mod0, prop_mod_above))
+```
+
+### Modelling Above-Ground Herbivory
+
+Optimal fixed effects
+```{r include=FALSE}
+above_mod1 <- glmmTMB((herb_above/total) ~ Plot + Site + (1|Site/Block),
+                      ziformula = ~ 0, family = binomial(),
+                      data = june18_dat, weights = total)
+
+above_mod2 <- update(above_mod1, ~ Site + (1|Site/Block))
+above_mod3 <- update(above_mod1, ~ Plot + (1|Site/Block))
+above_mod4 <- update(above_mod1, ~ (1|Site/Block))
+
+model.sel(above_mod1, above_mod2, above_mod3, above_mod4)
+```
+* Plot-only model is best
+
+Test ZI
+```{r include=FALSE}
+above_modZI <- update(above_mod3, ziformula = ~ 1)
+
+model.sel(above_mod3, above_modZI)
+
+above_mod2 <- update(above_modZI, ~ Plot + Site + (1|Site/Block))
+above_mod3 <- update(above_modZI, ~ Site + (1|Site/Block))
+above_mod4 <- update(above_modZI, ~ (1|Site/Block))
+
+model.sel(above_modZI, above_mod2, above_mod3, above_mod4)
+```
+* ZI improves fit
+
+```{r include=FALSE}
+above_table <- model.sel(above_modZI, above_mod2, above_mod3, above_mod4) %>%
+  gt() %>% 
+    tab_header(title = "Model Comparison: Above-Ground Herbivory") %>%
+    tab_spanner(label = md("*Fixed Effects*"), columns = 4:5) %>% 
+    cols_label("cond(Plot)" = md("*Treatment*"), "cond(Site)" = md("*Climate*")) %>% 
+    cols_hide(columns = c(1,2,3,7,9)) %>% 
+    fmt_number(columns = vars(AICc, weight)) %>%
+    fmt_missing(columns = 4:5, missing_text = "-")
+
+gtsave(above_table, "plots/above_table.png")
+```
+
+```{r echo=FALSE}
+above_table
+```
+
+DHARMa Diagnostics:
+```{r echo=FALSE}
+above_sim <- simulateResiduals(fittedModel = above_modZI, plot = F, n = 1000)
+hist(above_sim)
+testResiduals(above_sim, plot = T)
+```
+* uniformity, dispersion, and outlier tests all non-significant
+
+Testing Effects
+```{r echo=FALSE}
+above_mod <- above_modZI
+
+pairs(emmeans(above_mod, "Plot"))
+
+june18_dat %>% 
+  group_by(Plot) %>% 
+  summarize(above_prop = mean(above_prop)) %>% 
+  ggplot(aes(x = Plot, y = above_prop, fill = Plot)) +
+    geom_bar(stat = "identity") +
+    scale_fill_brewer(palette = "Dark2") +
+    theme_bw()
+
+june18_dat %>% 
+  group_by(Plot) %>% 
+  summarize(above_prop = mean(above_prop))
+```
+* O-WC and W-WC are significantly different
+* note: contrasts are still on the cloglog scale
+
+```{r eval=FALSE, include=FALSE}
+ggplot(june18_dat, aes(x = Plot, y = above_prop)) +
+  geom_boxplot() + theme_bw()
+```
+
+# Summary Table of all Response Variables
+
+```{r include=FALSE}
+summary_table_mean <- june18_dat %>% 
+  group_by(Plot, Site) %>% 
+  summarize_at(vars(total, alive, prop_dead, above_prop), funs(mean)) %>% 
+  ungroup() %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column() %>% 
+  slice(3:6)
+
+summary_table_se <- june18_dat %>% 
+  group_by(Plot, Site) %>% 
+  summarize_at(vars(total, alive, prop_dead, above_prop), funs(std.error(.))) %>% 
+  ungroup() %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column() %>% 
+  slice(3:6)
+
+summary <- bind_cols(summary_table_mean, summary_table_se)
+
+summary_table <- summary %>% 
+  select(-11) %>% 
+  gt() %>% 
+    cols_merge_uncert(2, 11, autohide = T) %>% 
+    cols_merge_uncert(3, 12, autohide = T) %>% 
+    cols_merge_uncert(4, 13, autohide = T) %>% 
+    cols_merge_uncert(5, 14, autohide = T) %>% 
+    cols_merge_uncert(6, 15, autohide = T) %>% 
+    cols_merge_uncert(7, 16, autohide = T) %>% 
+    cols_merge_uncert(8, 17, autohide = T) %>% 
+    cols_merge_uncert(9, 18, autohide = T) %>%
+    cols_merge_uncert(10, 19, autohide = T) %>% 
+    tab_header(title = "Summary of Results") %>%
+    tab_spanner(label = md("**Arid**"), columns = c(2,5,8)) %>% 
+    tab_spanner(label = md("**Intermediate**"), columns = c(3,6,9)) %>% 
+    tab_spanner(label = md("**Mesic**"), columns = c(4,7,10)) %>% 
+    cols_label(V1 = "O", V4 = "W", V7 = "WC",
+               V2 = "O", V5 = "W", V8 = "WC",
+               V3 = "O", V6 = "W", V9 = "WC")
+gtsave(summary_table, "plots/summary_table.png")
+```
+
+```{r echo=FALSE}
+summary_table
+```
+
+## Desiccation
+
+```{r eval=FALSE, include=FALSE}
+ggplot(june18_dat, aes(x = dess_YN)) +
+  geom_histogram(binwidth = 1)
+```
+
+Dessication intensity (dead dess/total dess)
+```{r eval=FALSE, include=FALSE}
+june18_dat %>% 
+  filter(dess_YN == 1) %>% 
+  ggplot(aes(x = Site, y = dead_dess/(alive_dess + dead_dess), fill = Plot)) +
+  geom_boxplot()
+```
+
+
+*dessication only happens in Arid and Interm O
+*100% of plants with dessication are dead in Arid O, dessication less intense in W and WC
+*however, arid has way higher prop dead so this may be expected even if dessication intensity is the same
+
+Adjusting for overall proportion dead:
+```{r eval=FALSE, include=FALSE}
+june18_dat %>% 
+  filter(dess_YN == 1) %>% 
+  ggplot(aes(x = Site, y = (dead_dess/prop_dead)/(alive_dess + dead_dess), fill = Plot)) +
+  geom_boxplot()
+```
+
+* effect reverses - Intermediate plots have a much higher proportion of death among dessicated seedlings
+
+alternate measure of dessication intensity: what % of dead plants have dessication?
+```{r eval=FALSE, include=FALSE}
+june18_dat %>% 
+  filter(dead_dess != 0) %>% 
+  ggplot(aes(x = Site, y = (dead_dess/dead), fill = Plot)) +
+  geom_boxplot()
+```
+
+* not super interesting, pretty similar for all plots with dead dessication
+
+## Time to bring in ungulate data!
+```{r eval=FALSE, include=FALSE}
+herb_dat <- read.csv("data_raw/2018_herbivore_dung_data_herbivore_activity_proxy.csv")
+View(herb_dat)
+str(herb_dat)
+```
+
+```{r eval=FALSE, include=FALSE}
+herb_dat <- herb_dat %>% 
+  rename(survey_period = 1, Plot = 4, RE = 5) %>% 
+  filter(survey_period == "EARLY SUMMER")
+
+herb_dat$Plot <- recode(herb_dat$Plot, "OPEN" = "WC", "PARTIAL" = "W", "TOTAL" = "O")
+
+ungulate_plot <- herb_dat %>% 
+                  gather(ungulate_type, abundance, ALL_WILDLIFE:ALL_COW) %>% 
+                  ggplot(aes(x = Plot, y = abundance, fill = ungulate_type)) +
+                    geom_boxplot() + theme_bw() + scale_fill_brewer(palette = "Dark2")
+ungulate_plot
+ggsave("plots/ungulate_plot.png", width = 10, height = 7)
+```
+
+* looks like exclosures are working really well!
+* seems like adding cattle increases ungulate presence much more than adding wildlife
 
 ## Herbivory Occurence
 
@@ -721,7 +899,7 @@ ggplot(june18_dat, aes(x = herb_YN)) +
 ```
 
 Occurrence of herbivory by plot and site
-```{r echo=FALSE}
+```{r eval=FALSE, include=FALSE}
 herb_plot <- june18_dat %>% 
   dplyr::group_by(Site, Plot) %>% 
   dplyr::summarize(mean = list(mean_se(herb_YN))) %>%
@@ -903,197 +1081,29 @@ model.sel(list(prop_mod0, prop_mod_herb))
 
 * adding herbivory occurence does not improve fit
 
-Investigating frequency of herbivory types
+### Exploratory Visualizations: Clumps
 ```{r eval=FALSE, include=FALSE}
-ggplot(june18_dat, aes(x=herb_above)) +
+ggplot(june18_dat, aes(x = clump))+
   geom_histogram(binwidth = 1)
 
-ggplot(june18_dat, aes(x=above_prop)) +
-  geom_histogram()
+ggplot(june18_dat, aes(x = clump_YN))+
+  geom_histogram(stat = "count")
 ```
+ 
+Clump presence by site and plot
+```{r eval=FALSE, include=FALSE}
+june18_dat$clump_YN <- as.numeric(june18_dat$clump_YN)
 
-Proportion of seedlings with above-ground herbivory:
-```{r echo=FALSE}
-above_plot <- june18_dat %>% 
-  group_by(Plot, Site) %>% 
-  summarize(mean = list(mean_se(above_prop))) %>% 
+june18_clump_plot <- june18_dat %>% 
+  dplyr::group_by(Site, Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(clump_YN))) %>%
   unnest(mean) %>% 
-  ggplot(aes(x = Site, y = y, fill = Plot)) +
-  bar_plot +
-  error_bars +
-  scale_fill_brewer(palette = "Dark2")
-above_plot
-ggsave("plots/above_plot.png", width = 10, height = 7)
+  ggplot(aes(x = Site, y = (y-1), fill = Plot)) +
+    bar_plot +
+    labs(x = "Climate Site", 
+         y = "Proportion of Plots with Clumps", 
+         title = "Presence of Clumps by Climate Site and Grazing Treatment", 
+         fill = "Grazing Treatment")
+june18_clump_plot
+ggsave("plots/june18_clump_plot.png", width = 10)
 ```
-
-* pretty intuitive, addition of cattle clearly increases above-ground herbivory, especially in mesic
-
-Proportion of seedlings with below-ground herbivory:
-```{r echo=FALSE}
-below_plot <- june18_dat %>% 
-  group_by(Plot, Site) %>% 
-  summarize(mean = list(mean_se(below_prop))) %>% 
-  unnest(mean) %>% 
-  ggplot(aes(x = Site, y = y, fill = Plot)) +
-  bar_plot +
-  error_bars
-  
-below_plot
-ggsave("plots/below_plot.png", width = 10, height = 7)
-```
-
-* below-ground herbivory basically only happens in Arid
-
-
-Adding above-ground herbivory frequency to proportion dead model
-```{r eval=FALSE, include=FALSE}
-prop_mod_above <- update(prop_mod0, ~ Site + above_prop + (1|Site/Block))
-#did this work? not sure why cnd(abv_prp) is a numeric value and not just a "+" like it usually is
-model.sel(list(prop_mod0, prop_mod_above))
-```
-
-### Modelling Above-Ground Herbivory
-
-Optimal fixed effects
-```{r include=FALSE}
-above_mod1 <- glmmTMB((herb_above/total) ~ Plot + Site + (1|Site/Block),
-                      ziformula = ~ 0, family = binomial(),
-                      data = june18_dat, weights = total)
-
-above_mod2 <- update(above_mod1, ~ Site + (1|Site/Block))
-above_mod3 <- update(above_mod1, ~ Plot + (1|Site/Block))
-above_mod4 <- update(above_mod1, ~ (1|Site/Block))
-
-model.sel(above_mod1, above_mod2, above_mod3, above_mod4)
-```
-* Plot-only model is best
-
-Test ZI
-```{r include=FALSE}
-above_modZI <- update(above_mod3, ziformula = ~ 1)
-
-model.sel(above_mod3, above_modZI)
-
-above_mod2 <- update(above_modZI, ~ Plot + Site + (1|Site/Block))
-above_mod3 <- update(above_modZI, ~ Site + (1|Site/Block))
-above_mod4 <- update(above_modZI, ~ (1|Site/Block))
-
-model.sel(above_modZI, above_mod2, above_mod3, above_mod4)
-```
-* ZI improves fit
-
-```{r include=FALSE}
-above_table <- model.sel(above_modZI, above_mod2, above_mod3, above_mod4) %>%
-  gt() %>% 
-    tab_header(title = "Model Comparison: Above-Ground Herbivory") %>%
-    tab_spanner(label = md("*Fixed Effects*"), columns = 4:5) %>% 
-    cols_label("cond(Plot)" = md("*Treatment*"), "cond(Site)" = md("*Climate*")) %>% 
-    cols_hide(columns = c(1,2,3,7,9)) %>% 
-    fmt_number(columns = vars(AICc, weight)) %>%
-    fmt_missing(columns = 4:5, missing_text = "-")
-
-gtsave(above_table, "plots/above_table.png")
-```
-
-```{r echo=FALSE}
-above_table
-```
-
-DHARMa Diagnostics:
-```{r echo=FALSE}
-above_sim <- simulateResiduals(fittedModel = above_modZI, plot = F, n = 1000)
-hist(above_sim)
-testResiduals(above_sim, plot = T)
-```
-* uniformity, dispersion, and outlier tests all non-significant
-
-Testing Effects
-```{r echo=FALSE}
-above_mod <- above_modZI
-
-pairs(emmeans(above_mod, "Plot"))
-
-june18_dat %>% 
-  group_by(Plot) %>% 
-  summarize(above_prop = mean(above_prop)) %>% 
-  ggplot(aes(x = Plot, y = above_prop, fill = Plot)) +
-    geom_bar(stat = "identity") +
-    scale_fill_brewer(palette = "Dark2") +
-    theme_bw()
-
-june18_dat %>% 
-  group_by(Plot) %>% 
-  summarize(above_prop = mean(above_prop))
-```
-* O-WC and W-WC are significantly different
-* note: contrasts are still on the cloglog scale
-
-```{r eval=FALSE, include=FALSE}
-ggplot(june18_dat, aes(x = Plot, y = above_prop)) +
-  geom_boxplot() + theme_bw()
-```
-
-## Desiccation
-
-```{r eval=FALSE, include=FALSE}
-ggplot(june18_dat, aes(x = dess_YN)) +
-  geom_histogram(binwidth = 1)
-```
-
-Dessication intensity (dead dess/total dess)
-```{r eval=FALSE, include=FALSE}
-june18_dat %>% 
-  filter(dess_YN == 1) %>% 
-  ggplot(aes(x = Site, y = dead_dess/(alive_dess + dead_dess), fill = Plot)) +
-  geom_boxplot()
-```
-
-
-*dessication only happens in Arid and Interm O
-*100% of plants with dessication are dead in Arid O, dessication less intense in W and WC
-*however, arid has way higher prop dead so this may be expected even if dessication intensity is the same
-
-Adjusting for overall proportion dead:
-```{r eval=FALSE, include=FALSE}
-june18_dat %>% 
-  filter(dess_YN == 1) %>% 
-  ggplot(aes(x = Site, y = (dead_dess/prop_dead)/(alive_dess + dead_dess), fill = Plot)) +
-  geom_boxplot()
-```
-
-* effect reverses - Intermediate plots have a much higher proportion of death among dessicated seedlings
-
-alternate measure of dessication intensity: what % of dead plants have dessication?
-```{r eval=FALSE, include=FALSE}
-june18_dat %>% 
-  filter(dead_dess != 0) %>% 
-  ggplot(aes(x = Site, y = (dead_dess/dead), fill = Plot)) +
-  geom_boxplot()
-```
-
-* not super interesting, pretty similar for all plots with dead dessication
-
-# Time to bring in ungulate data!
-```{r eval=FALSE, include=FALSE}
-herb_dat <- read.csv("data_raw/2018_herbivore_dung_data_herbivore_activity_proxy.csv")
-View(herb_dat)
-str(herb_dat)
-```
-
-```{r eval=FALSE, include=FALSE}
-herb_dat <- herb_dat %>% 
-  rename(survey_period = 1, Plot = 4, RE = 5) %>% 
-  filter(survey_period == "EARLY SUMMER")
-
-herb_dat$Plot <- recode(herb_dat$Plot, "OPEN" = "WC", "PARTIAL" = "W", "TOTAL" = "O")
-
-ungulate_plot <- herb_dat %>% 
-                  gather(ungulate_type, abundance, ALL_WILDLIFE:ALL_COW) %>% 
-                  ggplot(aes(x = Plot, y = abundance, fill = ungulate_type)) +
-                    geom_boxplot() + theme_bw() + scale_fill_brewer(palette = "Dark2")
-ungulate_plot
-ggsave("plots/ungulate_plot.png", width = 10, height = 7)
-```
-
-* looks like exclosures are working really well!
-* seems like adding cattle increases ungulate presence much more than adding wildlife

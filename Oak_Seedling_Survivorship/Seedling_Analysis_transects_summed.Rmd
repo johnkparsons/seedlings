@@ -1,41 +1,37 @@
 ---
-title: "Seedling Analysis"
+title: "Climate-mediated Effects of Large Herbivores on Oak Seedling Recruitment (Establishment?) and Survival"
 author: "John Parsons"
-date: "6/22/2020"
+date: "`r Sys.Date()`"
 output:
   html_document: default
 ---
 
 ### Load Required Packages
 ```{r include=FALSE}
-install.packages("plotrix")
-library(tidyverse) #ggplot
-library(dplyr) #data transformation
+#install.packages("ggsignif")
+library(tidyverse) #cite ggplot, dplyr, and readr separately
 group_by <- dplyr::group_by
 summarize <- dplyr::summarise
 select <- dplyr::select
 recode <- dplyr::recode
 rename <- dplyr::rename
-library(readr)
 library(lubridate) #date manipulation
-library(ggpubr)
-library(car)
 library(RColorBrewer) #plot colors
 library(MuMIn) #model.sel, dredge
 library(glmmTMB) #GLMMs
-#library(jtools) #model analysis
-library(sjPlot) #model output table
 library(DHARMa) #model diagnostics
-library(effects)
 library(emmeans) #effects testing
 library(installr)
-library(sjstats)
 #install.pandoc()
-library(gt)
-remotes::install_github("rstudio/gt")
-library(webshot)
-webshot::install_phantomjs() #saving gt tables
+#remotes::install_github("rstudio/gt")
+library(gt) #table outputs
+#webshot::install_phantomjs() 
+library(webshot) #saving gt tables
 library(plotrix)
+library(cowplot)
+library(ggsignif)
+sessionInfo()
+citation("emmeans")
 ```
 
 ### Data Tidying/Transformations
@@ -153,12 +149,39 @@ total_plot <- june18_dat %>%
                   position = position_dodge(width = 0.9),
                   width = 0.2) +
     labs(x = "Climate Site", 
-         y = "Average Number of Seedlings per Plot", 
-         title = "Number of Seedlings by Climate Site and Grazing Treatment", 
-         fill = "Grazing Treatment") +
-    scale_fill_brewer(palette = "Dark2")
+         y = "Average Number of Seedlings per Plot") +
+    scale_fill_brewer("Grazing Treatment",
+                      labels = c("Exclsoure", "Wildlife", "Open"),
+                      palette = "Dark2") +
+  theme_cowplot() +
+  theme(panel.grid.major.x = element_blank())
 total_plot
 ggsave("plots/total_plot.png", width = 10, height = 7)
+```
+
+Total seedling abundance by site and plot, with significance codes:
+```{r echo=FALSE}
+total_plot_sig <- june18_dat %>%
+  dplyr::group_by(Site, Plot) %>% 
+  dplyr::summarize(mean = list(mean_se(total))) %>%
+  unnest(mean) %>% 
+  mutate(sig = if_else(Plot == "O", "a", if_else(Plot == "W", "b", "c"))) %>% 
+  ggplot(aes(x = Site, y = y, fill = Plot)) +
+    geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+    geom_text(aes(label = sig), position = position_dodge(width = 0.9),
+                                size = 5, vjust = -0.5, hjust = 1.8) +
+    geom_errorbar(aes(ymax = ymax, ymin = ymin),
+                  position = position_dodge(width = 0.9),
+                  width = 0.2) +
+    labs(x = "Climate Site", 
+         y = "Average Number of Seedlings per Plot") +
+    scale_fill_brewer("Grazing Treatment",
+                      labels = c("Exclsoure", "Wildlife", "Open"),
+                      palette = "Dark2") +
+    theme_cowplot() +
+  ggsave("plots/total_plot_sig.png", width = 10, height = 7)
+
+total_plot_sig
 ```
 
 
@@ -221,11 +244,6 @@ Optimal Fixed Effects Structure:
 #start with truncated poisson distribution and full model:
 total_mod1 <- glmmTMB(total ~ Site*Plot + (1|Site/Block), data = june18_dat, family = truncated_poisson)
 
-dredge(total_mod1)
-#full model is best
-
-total_mod <- total_mod1
-
 total_table <- dredge(total_mod) %>% 
   gt() %>% 
     tab_header(title = "Model Comparison: Total Seedling Abundance") %>%
@@ -233,11 +251,13 @@ total_table <- dredge(total_mod) %>%
     cols_label("cond(Plot)" = md("*Treatment*"), 
                "cond(Site)" = "Climate",
                "cond(Plot:Site)" = "Treatment:Climate") %>% 
-    cols_hide(columns = c(1,2,7,9)) %>% 
-    fmt_number(columns = vars(AICc, delta, weight)) %>%
+    cols_hide(columns = c(1,2,7,9,10)) %>% 
+    fmt_number(columns = vars(AICc)) %>%
     fmt_missing(columns = 3:5, missing_text = "-")
-
 gtsave(total_table, "plots/total_table.png")
+
+#full model is best
+total_mod <- total_mod1
 ```
 
 ```{r echo=FALSE}
@@ -279,8 +299,6 @@ model.sel(list(total_mod, total_mod_pois))
 
 Testing Effects
 ```{r echo=FALSE}
-plot(allEffects(total_mod))
-
 emmeans(total_mod, pairwise ~ Site)
 #all non-sig
 emmeans(total_mod, pairwise ~ Plot)
@@ -348,19 +366,19 @@ Living seedling abundance by site and plot:
 alive_plot <- june18_dat %>% 
   dplyr::group_by(Site, Plot) %>% 
   dplyr::summarize(mean = list(mean_se(alive))) %>%
-  unnest(mean) %>% 
+  unnest(mean) %>%
+  add_column(sig = c("a", "b", "a", "a", "b", "c", "a", "b", "c")) %>% 
   ggplot(aes(x = Site, y = y, fill = Plot)) +
-    geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
-    geom_errorbar(aes(ymax = ymax, ymin = ymin),
-                  position = position_dodge(width = 0.9),
-                  width = 0.2) +
+    bar_plot +
+    error_bars +
+    geom_text(aes(label = sig), position = position_dodge(width = 0.9), size = 5, vjust = -0.5, hjust = 1.8) +
     labs(x = "Climate Site", 
-         y = "Average Number of Living Seedlings per Plot", 
-         title = "Number of Living Seedlings by Climate Site and Grazing Treatment", 
-         fill = "Grazing Treatment") +
-    scale_fill_brewer(palette = "Dark2")
+         y = "Average Number of Seedlings per Plot") +
+    scale_fill_brewer("Grazing Treatment", labels = c("Exclsoure", "Wildlife", "Open"),
+                      palette = "Dark2") +
+  theme_cowplot() +
+  ggsave("plots/alive_plot.png", width = 10)
 alive_plot
-ggsave("plots/alive_plot.png", width = 10)
 ```
 
 Grouped by grazed Y/N instead of plot:
@@ -432,10 +450,9 @@ alive_table <- dredge(alive_mod) %>%
     cols_label("cond(Plot)" = "Treatment", 
                              "cond(Site)" = "Climate", 
                              "cond(Plot:Site)" = "Treatment:Climate") %>% 
-    cols_hide(columns = c(1:3,8,10)) %>% 
-    fmt_number(columns = vars(AICc, weight)) %>%
+    cols_hide(columns = c(1:3,8,10,11)) %>% 
+    fmt_number(columns = vars(AICc)) %>%
     fmt_missing(columns = 4:6, missing_text = "-")
-
 gtsave(alive_table, "plots/alive_table.png")
 ```
 
@@ -454,8 +471,6 @@ testResiduals(alive_sim, plot = T)
 
 Testing Effects
 ```{r echo=FALSE}
-plot(allEffects(alive_mod))
-
 pairs(emmeans(alive_mod, "Plot"))
 
 pairs(emmeans(alive_mod, ~ Plot | Site))
@@ -507,17 +522,19 @@ ggplot(june18_dat, aes(x = alive/total)) +
 Proportion dead by plot and site
 ```{r include=FALSE}
 prop_plot <- june18_dat %>% 
-              group_by(Site, Plot) %>% 
-              summarize(mean = list(mean_se(prop_dead))) %>%
-              unnest(mean) %>% 
-              ggplot(aes(x = Site, y = y, fill = Plot)) +
-                bar_plot +
-                error_bars +
-                labs(x = "Climate Site", 
-                     y = "Proportion of Seedlings Dead", 
-                     title = "Seedling Mortality by Climate Site and Grazing Treatment", 
-                     fill = "Grazing Treatment") +
-                scale_fill_brewer(palette = "Dark2")
+  group_by(Site, Plot) %>% 
+  summarize(mean = list(mean_se(prop_dead))) %>%
+  unnest(mean) %>% 
+  ggplot(aes(x = Site, y = y, fill = Plot)) +
+    bar_plot +
+    error_bars +
+    geom_signif(annotations = c("p < 0.005", "p < 0.001", "p = 0.07"),
+                y_position = c(1.05, 1.15, 0.4), xmin=c(1,1,2), xmax=c(2,3,3), tip_length = 0) +
+    labs(x = "Climate Site", 
+         y = "Mortality Rate") +
+    scale_fill_brewer("Grazing Treatment", labels = c("Exclsoure", "Wildlife", "Open"),
+                      palette = "Dark2") +
+    theme_cowplot() +
 ggsave("plots/prop_plot.png", width = 10, height = 7)
 ```
 
@@ -555,12 +572,10 @@ june18_dat %>%
 ### Modelling Proportion Dead
 
 ```{r include=FALSE}
-june18_dat <- june18_dat %>% mutate(no_ones = ifelse(prop_dead == 1, 0.999, prop_dead))
-
 #start with binomial distribution 
-prop_mod1 <- glmmTMB((dead/total) ~ Site + Plot + (1|Site/Block),
+prop_mod1 <- glmmTMB(cbind(dead, alive) ~ Site + Plot + (1|Site/Block),
                      ziformula = ~ 0, data = june18_dat,
-                     family = binomial(), weights = (total))
+                     family = binomial())
 ```
 
 Optimal Fixed Effects Structure
@@ -585,21 +600,17 @@ prop_mod3 <- update(prop_modZI, ~ Site + (1|Site/Block))
 #fails to converge
 prop_mod4 <- update(prop_modZI, ~(1|Site/Block))
 
-model.sel(prop_modZI, prop_mod2, prop_mod4)
-prop_mod <- prop_modZI
-```
-
-```{r include=FALSE}
 prop_table <- model.sel(prop_modZI, prop_mod2, prop_mod4) %>%
   gt() %>% 
     tab_header(title = "Model Comparison: Seedling Mortality") %>%
     tab_spanner(label = md("*Fixed Effects*"), columns = 4:5) %>% 
     cols_label("cond(Plot)" = md("*Treatment*"), "cond(Site)" = md("*Climate*")) %>% 
-    cols_hide(columns = c(1,2,3,7,9)) %>% 
-    fmt_number(columns = vars(AICc, weight)) %>%
+    cols_hide(columns = c(1,2,3,7,9,10)) %>% 
+    fmt_number(columns = vars(AICc)) %>%
     fmt_missing(columns = 4:5, missing_text = "-")
-
 gtsave(prop_table, "plots/prop_table.png")
+
+prop_mod <- prop_modZI
 ```
 
 ```{r echo=FALSE}
@@ -625,12 +636,38 @@ pairs(emmeans(prop_mod, "Plot"))
 # O-W and O-WC are significant
 
 pairs(emmeans(prop_mod, "Site"))
-# all site contrast are significant
+#Arid-Interm and Arid_mesic are significant
 
 #r.squaredGLMM(prop_mod_ZI)
 ```
 
-* The best-fit model for seedling mortality included both climate site and grazing treatment (Table 1). Arid plots had 80.15% mortality, more than both Mesic plots (0.53%, p < 0.0001) and Intermediate plots (10.43%, p < 0.001). Intermediate plots also had significantly higher mortality than Mesic plots (p < 0.05). Across climate sites, exclosure plots (33.46%) and wildlife/cattle plots (29.33%) did not significantly differ in their mortality rates (p = 0.1774). 28.32% of seedlings died in wildlife plots,  more than exclosure plots (p < 0.0005) and less than wildlife/cattle plots (p < 0.05).
+* The best-fit model for seedling mortality included both climate site and grazing treatment (Table 1). Arid plots had 80.15% mortality, more than both Mesic plots (0.53%, p < 0.0001) and Intermediate plots (10.43%, p < 0.001). Intermediate plots did not have significantly higher mortality than Mesic plots (p = 0.07). Across climate sites, exclosure plots (33.46%) and wildlife/cattle plots (29.33%) did not significantly differ in their mortality rates (p = 0.1774). 28.32% of seedlings died in wildlife plots,  more than exclosure plots (p < 0.0005) and less than wildlife/cattle plots (p < 0.05).
+
+#### Arid Mortality Model
+```{r}
+#subset dataset
+arid_dat <- june18_dat %>% 
+  filter(Site == "Arid")
+#start with binomial distribution 
+arid_mod1 <- glmmTMB(cbind(dead, alive) ~ Plot + (1|Site/Block),
+                     ziformula = ~ 0, data = arid_dat,
+                     family = binomial())
+
+arid_mod2 <- update(arid_mod1, ~ (1|Site/Block))
+arid_modZI <- update(arid_mod1, ziformula = ~1)
+arid_modZI2 <- update(arid_modZI, ~ (1|Site/Block))
+
+model.sel(arid_mod1, arid_mod2, arid_modZI, arid_modZI2)
+#non-ZI full model is best
+
+arid_mod <- arid_mod1
+
+arid_dead_sim <- simulateResiduals(fittedModel = arid_mod, plot = F, n = 1000)
+hist(arid_dead_sim)
+testResiduals(prop_dead_sim, plot = T)
+
+pairs(emmeans(arid_mod, "Plot"))
+```
 
 ## Herbivory
 
@@ -653,12 +690,15 @@ above_plot <- june18_dat %>%
     bar_plot +
     error_bars +
     labs(x = "Climate Site", 
-         y = "Proportion of Seedlings", 
-         title = "Above-Ground Herbivory Occurrence by Climate Site and Grazing Treatment", 
-         fill = "Grazing Treatment") +
-    scale_fill_brewer(palette = "Dark2")
+         y = "Herbivory Occurrence") +
+    scale_fill_brewer("Grazing Treatment", labels = c("Exclsoure", "Wildlife", "Open"),
+                      palette = "Dark2") +
+    theme_cowplot() +
+    ggsave("plots/above_plot.png", width = 10, height = 7)
+```
+
+```{r}
 above_plot
-ggsave("plots/above_plot.png", width = 10, height = 7)
 ```
 
 * pretty intuitive, addition of cattle clearly increases above-ground herbivory, especially in mesic
@@ -690,9 +730,9 @@ model.sel(list(prop_mod0, prop_mod_above))
 
 Optimal fixed effects
 ```{r include=FALSE}
-above_mod1 <- glmmTMB((herb_above/total) ~ Plot + Site + (1|Site/Block),
+above_mod1 <- glmmTMB(cbind(herb_above,(total-herb_above)) ~ Plot + Site + (1|Site/Block),
                       ziformula = ~ 0, family = binomial(),
-                      data = june18_dat, weights = total)
+                      data = june18_dat)
 
 above_mod2 <- update(above_mod1, ~ Site + (1|Site/Block))
 above_mod3 <- update(above_mod1, ~ Plot + (1|Site/Block))
@@ -721,11 +761,11 @@ above_table <- model.sel(above_modZI, above_mod2, above_mod3, above_mod4) %>%
   gt() %>% 
     tab_header(title = "Model Comparison: Above-Ground Herbivory") %>%
     tab_spanner(label = md("*Fixed Effects*"), columns = 4:5) %>% 
-    cols_label("cond(Plot)" = md("*Treatment*"), "cond(Site)" = md("*Climate*")) %>% 
-    cols_hide(columns = c(1,2,3,7,9)) %>% 
-    fmt_number(columns = vars(AICc, weight)) %>%
+    cols_label("cond(Plot)" = md("*Treatment*"),
+               "cond(Site)" = md("*Climate*")) %>% 
+    cols_hide(columns = c(1,2,3,7,9,10)) %>% 
+    fmt_number(columns = vars(AICc)) %>%
     fmt_missing(columns = 4:5, missing_text = "-")
-
 gtsave(above_table, "plots/above_table.png")
 ```
 
@@ -750,14 +790,8 @@ pairs(emmeans(above_mod, "Plot"))
 june18_dat %>% 
   group_by(Plot) %>% 
   summarize(above_prop = mean(above_prop)) %>% 
-  ggplot(aes(x = Plot, y = above_prop, fill = Plot)) +
-    geom_bar(stat = "identity") +
-    scale_fill_brewer(palette = "Dark2") +
-    theme_bw()
-
-june18_dat %>% 
-  group_by(Plot) %>% 
-  summarize(above_prop = mean(above_prop))
+  ggplot(aes(x = Plot, y = above_prop)) +
+    geom_bar(stat = "identity")
 ```
 * O-WC and W-WC are significantly different
 * note: contrasts are still on the cloglog scale
@@ -781,7 +815,8 @@ summary_table_mean <- june18_dat %>%
 
 summary_table_se <- june18_dat %>% 
   group_by(Plot, Site) %>% 
-  summarize_at(vars(total, alive, prop_dead, above_prop), funs(std.error(.))) %>% 
+  summarize_at(vars(total, alive, prop_dead, above_prop),
+               funs(std.error(.))) %>% 
   ungroup() %>% 
   t() %>% 
   as.data.frame() %>% 
@@ -790,9 +825,15 @@ summary_table_se <- june18_dat %>%
 
 summary <- bind_cols(summary_table_mean, summary_table_se)
 
+write.csv(summary, "summary")
+summary <- read.csv("summary")
+str(summary)
+
 summary_table <- summary %>% 
+  select(-1) %>% 
   select(-11) %>% 
-  gt() %>% 
+  gt() %>%
+    fmt_number(columns = 2:19, decimals = 3) %>% 
     cols_merge_uncert(2, 11, autohide = T) %>% 
     cols_merge_uncert(3, 12, autohide = T) %>% 
     cols_merge_uncert(4, 13, autohide = T) %>% 
@@ -806,6 +847,7 @@ summary_table <- summary %>%
     tab_spanner(label = md("**Arid**"), columns = c(2,5,8)) %>% 
     tab_spanner(label = md("**Intermediate**"), columns = c(3,6,9)) %>% 
     tab_spanner(label = md("**Mesic**"), columns = c(4,7,10)) %>% 
+    tab_stubhead(label = md("*Response Variable*")) %>% 
     cols_label(V1 = "O", V4 = "W", V7 = "WC",
                V2 = "O", V5 = "W", V8 = "WC",
                V3 = "O", V6 = "W", V9 = "WC")
@@ -830,7 +872,6 @@ june18_dat %>%
   ggplot(aes(x = Site, y = dead_dess/(alive_dess + dead_dess), fill = Plot)) +
   geom_boxplot()
 ```
-
 
 *dessication only happens in Arid and Interm O
 *100% of plants with dessication are dead in Arid O, dessication less intense in W and WC
@@ -1101,9 +1142,11 @@ june18_clump_plot <- june18_dat %>%
   ggplot(aes(x = Site, y = (y-1), fill = Plot)) +
     bar_plot +
     labs(x = "Climate Site", 
-         y = "Proportion of Plots with Clumps", 
-         title = "Presence of Clumps by Climate Site and Grazing Treatment", 
-         fill = "Grazing Treatment")
+         y = "Average Number of Seedlings per Plot", 
+         title = "Number of Seedlings by Climate Site and Grazing Treatment") +
+    scale_fill_brewer("Grazing Treatment", labels = c("Exclsoure", "Wildlife", "Wildlife/Cattle"),
+                      palette = "Dark2") +
+    theme_bw(base_size = 13)
 june18_clump_plot
 ggsave("plots/june18_clump_plot.png", width = 10)
 ```
